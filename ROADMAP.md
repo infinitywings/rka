@@ -55,6 +55,23 @@ release boundaries are recorded in
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
+Portable installation and managed model lifecycle belong to the separate
+future `rka-app`, not to a Core branch. Core's provider and vector-space side of
+that boundary is recorded in
+[ADR 0017](docs/adr/0017-portable-embedding-runtime-boundary.md). The Qwen
+standard-profile candidate remains gated by retrieval quality and real 16 GB
+Mac/Windows measurements; it is not yet a Core or App release default.
+The immediate external follow-up is a small `rka-app` sidecar prototype plus a
+frozen two-machine retrieval/hardware evaluation; those tasks consume Core's
+contract but do not extend the E0-E6 Core milestone hierarchy.
+
+One bounded Core follow-up remains separate from the portable-runtime work:
+make explicit/manual embedding repair compare canonical content hashes and
+vector presence, rather than repairing only missing current-model metadata.
+Until then, failed edit embeddings remain owned by the durable worker retry
+path; the backfill endpoint must not be described as a general stale-index
+scrubber.
+
 ## Current strategic priority
 
 RKA Core reliability comes first. No new Writer/Workbench or autonomous

@@ -17,6 +17,7 @@ corpus refresh mis_01KS0QEW21N2NG4EJTKJ3JTWTE).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import socket
@@ -27,6 +28,14 @@ from rka.infra.database import Database
 from rka.services.jobs import JobLeaseLost, JobQueue
 
 logger = logging.getLogger(__name__)
+
+_EMBEDDING_JOB_TYPES = {
+    "mission_embed",
+    "note_embed",
+    "claim_embed",
+    "decision_embed",
+    "literature_embed",
+}
 
 
 class EnrichmentWorker:
@@ -41,12 +50,20 @@ class EnrichmentWorker:
         lease_seconds: int = 300,
         max_attempts: int = 5,
         worker_id: str | None = None,
+        data_dir: Path | str | None = None,
+        embeddings_enabled: bool = True,
+        env_fallback_model: str = "nomic-ai/nomic-embed-text-v1.5",
     ):
         self.db = db
         self.embeddings = embeddings
         self.poll_interval = poll_interval
         self.queue = JobQueue(db, lease_seconds=lease_seconds, default_max_attempts=max_attempts)
         self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
+        self._embedding_data_dir = Path(data_dir) if data_dir is not None else None
+        self._embeddings_enabled = embeddings_enabled
+        self._env_fallback_model = env_fallback_model
+        self._embedding_config_fingerprint: str | None = None
+        self._embedding_generation: int | None = None
 
     # ------------------------------------------------------------------
     # v2.5.8 boot path (Bug 2 fix per dec_01KS3E1FGSK530N8HM04BNMCEW)
@@ -74,10 +91,8 @@ class EnrichmentWorker:
         2. Otherwise, attempt to read `<data_dir>/embedding_config.json`
            via `EmbeddingConfigService.load_config()` and construct an
            `EmbeddingService.from_config(...)`.
-        3. On any failure (file missing, corrupt, EmbeddingService
-           construction error), fall back to the legacy env-driven
-           constructor (`EmbeddingService(model_name=env_fallback_model)`)
-           and log WARNING.
+        3. A missing file retains the legacy first-run default. An existing
+           invalid file fails closed instead of selecting another model.
 
         Log lines explicitly indicate which path was taken so operators
         can correlate worker boot logs with config-changed-via-webui events.
@@ -95,6 +110,9 @@ class EnrichmentWorker:
             lease_seconds=lease_seconds,
             max_attempts=max_attempts,
             worker_id=worker_id,
+            data_dir=data_dir,
+            embeddings_enabled=embeddings_enabled,
+            env_fallback_model=env_fallback_model,
         )
 
     @staticmethod
@@ -105,61 +123,118 @@ class EnrichmentWorker:
         embeddings_enabled: bool,
         env_fallback_model: str,
     ):
-        """Load EmbeddingService from persisted config or fall back to env.
-
-        Isolated as a staticmethod so unit tests can exercise the resolution
-        logic without instantiating a full worker. Logs are informative-only
-        (no exceptions raised on fallback).
-        """
+        """Load EmbeddingService, failing closed on an invalid saved config."""
         if not embeddings_enabled:
             logger.info(
                 "worker boot: embeddings_enabled=False; running without EmbeddingService"
             )
             return None
 
-        # Lazy imports keep the worker.py top-level import surface small
-        # (embedding_config + embedding_backends pull in optional deps).
-        try:
-            from rka.infra.embeddings import EmbeddingService
-            from rka.services.embedding_config import EmbeddingConfigService
+        # Lazy imports keep the worker.py top-level import surface small.
+        from rka.infra.embeddings import EmbeddingService
+        from rka.services.embedding_config import EmbeddingConfigService
 
-            cfg_svc = EmbeddingConfigService(config_dir=data_dir)
-            if not cfg_svc.config_path.exists():
-                logger.info(
-                    "worker boot: falling back to env defaults; persisted config "
-                    "not found at %s",
-                    cfg_svc.config_path,
-                )
-                return EmbeddingService(model_name=env_fallback_model, db=db)
-
-            embedding_cfg = cfg_svc.load_config()
-            embeddings = EmbeddingService.from_config(
-                embedding_cfg.model_dump(), db=db
-            )
+        cfg_svc = EmbeddingConfigService(config_dir=data_dir)
+        if not cfg_svc.config_path.exists():
             logger.info(
-                "worker boot: reading config from %s (backend=%s, dim=%d)",
+                "worker boot: falling back to env defaults; persisted config "
+                "not found at %s",
                 cfg_svc.config_path,
-                embedding_cfg.backend,
-                embeddings.dim,
             )
-            return embeddings
-        except Exception as exc:
-            logger.warning(
-                "worker boot: failed to load persisted config (%s); falling back "
-                "to env defaults (model=%s)",
-                exc,
-                env_fallback_model,
+            return EmbeddingService(model_name=env_fallback_model, db=db)
+
+        embedding_cfg = cfg_svc.load_config()
+        if not (embedding_cfg.config or {}).get("dim"):
+            raise ValueError(
+                "persisted embedding config has no detected dimension; save it through the API"
             )
-            try:
-                from rka.infra.embeddings import EmbeddingService
-                return EmbeddingService(model_name=env_fallback_model, db=db)
-            except Exception as inner_exc:
-                logger.error(
-                    "worker boot: env-fallback EmbeddingService construction also "
-                    "failed (%s); running without embeddings",
-                    inner_exc,
+        embeddings = EmbeddingService.from_config(embedding_cfg.model_dump(), db=db)
+        logger.info(
+            "worker boot: reading config from %s (backend=%s, dim=%d)",
+            cfg_svc.config_path,
+            embedding_cfg.backend,
+            embeddings.dim,
+        )
+        return embeddings
+
+    def _config_fingerprint(self) -> str:
+        if self._embedding_data_dir is None:
+            return "unmanaged"
+        path = self._embedding_data_dir / "embedding_config.json"
+        if not path.exists():
+            return "missing"
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    async def _refresh_embeddings_before_job(self) -> None:
+        """Reload config/generation before an embedding job when needed."""
+
+        if not self._embeddings_enabled or self._embedding_data_dir is None:
+            return
+
+        from rka.infra.embeddings import EmbeddingService
+        from rka.services.embedding_config import EmbeddingConfigService
+        from rka.services.embedding_index import (
+            EmbeddingGenerationMismatch,
+            embedding_space_signature,
+            get_embedding_index_state,
+        )
+
+        fingerprint = self._config_fingerprint()
+        state = await get_embedding_index_state(self.db)
+        generation = state.generation if state is not None else None
+        if (
+            self.embeddings is not None
+            and fingerprint == self._embedding_config_fingerprint
+            and generation == self._embedding_generation
+        ):
+            return
+
+        cfg_svc = EmbeddingConfigService(config_dir=self._embedding_data_dir)
+        if not cfg_svc.config_path.exists():
+            if state is not None:
+                raise EmbeddingGenerationMismatch(
+                    "persisted embedding config is missing for the active generation"
                 )
-                return None
+            embeddings = EmbeddingService(
+                model_name=self._env_fallback_model,
+                db=self.db,
+            )
+        else:
+            embedding_cfg = cfg_svc.load_config()
+            if not (embedding_cfg.config or {}).get("dim"):
+                raise ValueError(
+                    "persisted embedding config has no detected dimension; "
+                    "save it through the API"
+                )
+            embeddings = EmbeddingService.from_config(
+                embedding_cfg.model_dump(),
+                db=self.db,
+            )
+            if state is not None:
+                signature = embedding_space_signature(
+                    embedding_cfg,
+                    dimensions=embeddings.dim,
+                )
+                if (
+                    signature != state.space_signature
+                    or embeddings.model_name != state.model_name
+                    or embeddings.dim != state.dimensions
+                ):
+                    raise EmbeddingGenerationMismatch(
+                        "embedding config and active index generation do not match"
+                    )
+                embeddings.bind_index_generation(
+                    state.generation,
+                    space_signature=state.space_signature,
+                )
+
+        self.embeddings = embeddings
+        self._embedding_config_fingerprint = fingerprint
+        self._embedding_generation = generation
+        logger.info(
+            "worker refreshed embedding configuration (generation=%s)",
+            generation if generation is not None else "legacy",
+        )
 
     async def run_once(self) -> bool:
         """Process one job if available."""
@@ -168,7 +243,7 @@ class EnrichmentWorker:
             return False
 
         try:
-            result = await self._process_job(job)
+            result = await self._process_job_with_generation_retry(job)
         except Exception as exc:  # pragma: no cover - failure path tested via queue state
             logger.exception("Worker job %s failed", job["id"])
             durable_error = str(exc)
@@ -190,6 +265,37 @@ class EnrichmentWorker:
             )
         return True
 
+    async def _process_job_with_generation_retry(
+        self,
+        job: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Retry one managed embedding job after losing a generation race.
+
+        The queue attempt already owns a live lease.  Reloading the durable
+        config and retrying once in that lease avoids terminalizing a
+        max-attempts=1 edit merely because its first vector write crossed a
+        configuration transition.  Persistent config/backend failures still
+        flow through the normal durable queue failure policy.
+        """
+        try:
+            return await self._process_job(job)
+        except Exception as exc:
+            from rka.services.embedding_index import EmbeddingGenerationMismatch
+
+            if (
+                not isinstance(exc, EmbeddingGenerationMismatch)
+                or job["job_type"] not in _EMBEDDING_JOB_TYPES
+                or self._embedding_data_dir is None
+            ):
+                raise
+            logger.info(
+                "Worker job %s lost embedding generation; reloading config and retrying",
+                job["id"],
+            )
+            self._embedding_config_fingerprint = None
+            self._embedding_generation = None
+            return await self._process_job(job)
+
     async def run_forever(self, stop_event: asyncio.Event | None = None) -> None:
         """Process jobs until cancelled or stop_event is set."""
         while True:
@@ -204,6 +310,9 @@ class EnrichmentWorker:
         job_type = job["job_type"]
         project_id = job["project_id"]
         entity_id = job.get("entity_id")
+
+        if job_type in _EMBEDDING_JOB_TYPES:
+            await self._refresh_embeddings_before_job()
 
         # ── Embedding-only jobs ──────────────────────────────────
 

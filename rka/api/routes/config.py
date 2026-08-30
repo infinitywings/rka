@@ -4,8 +4,8 @@ Four routes:
 
   - GET  /api/config/embedding              — current config (api_key redacted)
   - PUT  /api/config/embedding              — validate + test + persist;
-                                              202 if backfill kicked off,
-                                              200 if only api_key changed
+                                              202 if reconciliation runs,
+                                              200 if no repair is needed
   - POST /api/config/embedding/test         — probe without persisting
   - GET  /api/config/embedding/backfill/status[?job_id=…]
                                             — polling endpoint for the UI
@@ -17,14 +17,16 @@ Error mapping (Affordance G):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from rka.api.deps import get_db, get_embeddings
 from rka.config import RKAConfig
 from rka.infra.embedding_backends import EmbeddingConfigError
 from rka.infra.embeddings import EmbeddingService
@@ -39,13 +41,25 @@ from rka.services.embedding_config import (
     EmbeddingConfig,
     EmbeddingConfigService,
 )
-from rka.services.embedding_reshape import reshape_all_vec_tables_if_needed
+from rka.services.embedding_index import (
+    EmbeddingDimensionTransitionRequired,
+    EmbeddingGenerationMismatch,
+    assert_online_dimension_compatible,
+    embedding_space_signature,
+    finish_embedding_transition,
+    get_embedding_index_state,
+    legacy_index_adoption_safe,
+    reconcile_embedding_index,
+    resume_embedding_transition,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 REDACTED_API_KEY = "***"
+_CONFIG_UPDATE_LOCK = asyncio.Lock()
+_BACKFILL_LOCK = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +88,82 @@ def _redact(config: EmbeddingConfig) -> dict[str, Any]:
     return payload
 
 
+def _restore_saved_secret(
+    svc: EmbeddingConfigService,
+    body: EmbeddingConfig,
+) -> EmbeddingConfig:
+    """Replace an omitted/redacted API key with the saved value for probing."""
+
+    try:
+        prior = svc.load_config()
+    except EmbeddingConfigError:
+        return body
+    submitted = dict(body.config or {})
+    if (
+        prior.backend == body.backend
+        and (
+            "api_key" not in submitted
+            or submitted.get("api_key") == REDACTED_API_KEY
+        )
+    ):
+        saved_secret = (prior.config or {}).get("api_key")
+        if saved_secret:
+            submitted["api_key"] = saved_secret
+            return body.model_copy(update={"config": submitted})
+    return body
+
+
+def _snapshot_config_file(svc: EmbeddingConfigService) -> tuple[bytes | None, int | None]:
+    """Capture the exact live config so a later DB commit failure can undo save."""
+
+    try:
+        data = svc.config_path.read_bytes()
+        mode = svc.config_path.stat().st_mode & 0o777
+        return data, mode
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        raise EmbeddingConfigError(
+            f"failed to snapshot embedding config at {svc.config_path}: {exc!s}",
+            hint="verify the embedding config directory is readable",
+        ) from exc
+
+
+def _restore_config_file(
+    svc: EmbeddingConfigService,
+    snapshot: tuple[bytes | None, int | None],
+) -> None:
+    """Atomically restore the exact pre-update config, including absence."""
+
+    data, mode = snapshot
+    try:
+        if data is None:
+            svc.config_path.unlink(missing_ok=True)
+            return
+        svc.config_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".embedding_config.restore.",
+            suffix=".tmp",
+            dir=str(svc.config_dir),
+        )
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+            os.chmod(tmp_path, mode or 0o600)
+            os.replace(tmp_path, svc.config_path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        raise EmbeddingConfigError(
+            f"failed to restore embedding config at {svc.config_path}: {exc!s}",
+            hint="restore embedding_config.backup.json before retrying",
+        ) from exc
+
+
 def _422(error: str, detail: str, hint: str = "") -> JSONResponse:
     return JSONResponse(
         status_code=422,
@@ -81,8 +171,28 @@ def _422(error: str, detail: str, hint: str = "") -> JSONResponse:
     )
 
 
-def _backend_signature(config: EmbeddingConfig) -> tuple[str, str, int, str]:
-    """Identity tuple used to decide whether backfill needs to fire on PUT.
+def _space_signature(config: EmbeddingConfig) -> str:
+    """Fields that determine the stored embedding space.
+
+    A change here requires a clean rebuild even when dimensions match. Mixing
+    vectors from two models or two input contracts in one sqlite-vec table
+    makes rankings undefined.
+    """
+    return embedding_space_signature(config)
+
+
+def _transport_signature(config: EmbeddingConfig) -> tuple[str, str, str]:
+    """Fields that can affect reachability without changing stored vectors."""
+    sub = config.config or {}
+    base_url = str(sub.get("base_url") or sub.get("host") or "")
+    model = str(sub.get("model") or sub.get("model_name") or "")
+    return (config.backend, base_url, model)
+
+
+def _backend_signature(
+    config: EmbeddingConfig,
+) -> tuple[str, tuple[str, str, str]]:
+    """Compatibility wrapper for the complete reconciliation identity.
 
     Includes `base_url` because repointing a dead backend at a reachable host
     is exactly the recovery action, and it is the one that most needs
@@ -94,13 +204,11 @@ def _backend_signature(config: EmbeddingConfig) -> tuple[str, str, int, str]:
     Same dim ⇒ `reshape_all_vec_tables_if_needed` is a no-op, so a base_url
     change costs a backfill of the genuinely-missing rows and nothing else —
     existing vectors are never discarded.
+
+    `api_key` and timeouts are deliberately absent: they may require a client
+    refresh, but they do not define a vector space or require re-embedding.
     """
-    backend = config.backend
-    sub = config.config or {}
-    model = sub.get("model") or sub.get("model_name") or ""
-    dim = int(sub.get("dim") or 0)
-    base_url = str(sub.get("base_url") or sub.get("host") or "")
-    return (backend, model, dim, base_url)
+    return (_space_signature(config), _transport_signature(config))
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +232,30 @@ async def put_embedding_config(
     background_tasks: BackgroundTasks,
     actor: str = Query(default="pi"),
 ) -> Any:
+    async with _CONFIG_UPDATE_LOCK:
+        return await _put_embedding_config_locked(
+            request,
+            body,
+            background_tasks,
+            actor,
+        )
+
+
+async def _put_embedding_config_locked(
+    request: Request,
+    body: EmbeddingConfig,
+    background_tasks: BackgroundTasks,
+    actor: str,
+) -> Any:
     svc = _config_service(request)
+    try:
+        config_snapshot = _snapshot_config_file(svc)
+    except EmbeddingConfigError as exc:
+        return _422("embedding_config_invalid", exc.detail, exc.hint)
+
+    # Settings never receives the saved secret. Omission (or the GET redaction
+    # marker) means preserve the prior key; an explicit empty string removes it.
+    body = _restore_saved_secret(svc, body)
 
     # Step 1: probe the requested config before persisting.
     test_result = await svc.test_config(body)
@@ -135,6 +266,13 @@ async def put_embedding_config(
             "verify base_url + model + api_key in Settings → Embeddings",
         )
 
+    # Persist the observed dimension. A dimless configuration otherwise writes
+    # metadata with dimension 0 and cannot be reconstructed safely at restart.
+    normalized_sub = dict(body.config or {})
+    if not normalized_sub.get("dim") and test_result.detected_dim:
+        normalized_sub["dim"] = int(test_result.detected_dim)
+        body = body.model_copy(update={"config": normalized_sub})
+
     # Step 2: load prior config to determine if backfill is needed.
     try:
         prior = svc.load_config()
@@ -142,45 +280,98 @@ async def put_embedding_config(
         # Treat a corrupt prior as "different" so backfill fires.
         prior = None
 
-    needs_backfill = (
-        prior is None or _backend_signature(prior) != _backend_signature(body)
-    )
+    space_changed = prior is None or _space_signature(prior) != _space_signature(body)
+    transport_changed = prior is None or _transport_signature(prior) != _transport_signature(body)
+    prior_key = (prior.config or {}).get("api_key") if prior is not None else None
+    credential_changed = prior is None or prior_key != (body.config or {}).get("api_key")
+    needs_backfill = space_changed or transport_changed or credential_changed
 
-    # Step 3: persist.
+    db = request.app.state.db
+    target_dim = int((body.config or {}).get("dim") or 0)
     try:
-        saved = svc.save_config(body, actor=actor)
+        await assert_online_dimension_compatible(db, dim=target_dim)
+    except EmbeddingDimensionTransitionRequired as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "embedding_offline_reindex_required",
+                "detail": str(exc),
+                "hint": "stop RKA API and worker, then run the supervised embedding reindex",
+            },
+        )
+
+    new_embeddings = EmbeddingService.from_config(body.model_dump(), db=db)
+
+    # Step 3: reconcile and persist under one DB writer lock. The final
+    # dimension check is authoritative; a racing old-space write cannot land
+    # between it and the sqlite-vec transition. Saving last also means a file
+    # error rolls the DB transition back.
+    config_saved = False
+    try:
+        async with db.transaction(migration_lock=True):
+            await assert_online_dimension_compatible(db, dim=target_dim)
+            reconciliation = await reconcile_embedding_index(
+                db,
+                space_signature=_space_signature(body),
+                model_name=new_embeddings.model_name,
+                dim=target_dim,
+                allow_legacy_adoption=legacy_index_adoption_safe(body),
+            )
+            saved = svc.save_config(body, actor=actor)
+            config_saved = True
+    except EmbeddingDimensionTransitionRequired as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "embedding_offline_reindex_required",
+                "detail": str(exc),
+                "hint": "stop RKA API and worker, then run the supervised embedding reindex",
+            },
+        )
     except EmbeddingConfigError as exc:
         return _422("embedding_config_invalid", exc.detail, exc.hint)
-
-    if not needs_backfill:
-        # api_key (or only-provenance) change — no re-embed, but the search
-        # path holds a provider client built at startup, so it must still be
-        # swapped or every subsequent query keeps using the old credentials
-        # while GET and /test both report the new ones.
-        request.app.state.embeddings = EmbeddingService.from_config(
-            saved.model_dump(), db=request.app.state.db
+    except BaseException as exc:  # cancellation must also restore the file
+        restore_error = None
+        if config_saved:
+            try:
+                _restore_config_file(svc, config_snapshot)
+            except EmbeddingConfigError as restore_exc:
+                restore_error = restore_exc.detail
+        if not isinstance(exc, Exception):
+            raise
+        logger.exception("embedding config update failed before commit")
+        detail = f"embedding configuration was not committed: {exc!s}"
+        if restore_error:
+            detail = f"{detail}; rollback also failed: {restore_error}"
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "embedding_config_update_failed",
+                "detail": detail,
+                "hint": "retry after checking the RKA database and config volume",
+            },
         )
+
+    new_embeddings.bind_index_generation(
+        reconciliation.state.generation,
+        space_signature=reconciliation.state.space_signature,
+    )
+
+    # Swap only after the durable generation transition has committed. Search
+    # observes reindexing and stays lexical until the backfill is complete.
+    request.app.state.embeddings = new_embeddings
+    request.app.state.search.embeddings = new_embeddings
+    request.app.state.embedding_unavailable_reason = None
+
+    needs_backfill = (
+        needs_backfill
+        or reconciliation.transitioned
+        or reconciliation.resumed
+    )
+    if not needs_backfill:
         return JSONResponse(status_code=200, content=_redact(saved))
 
-    # Step 4: kick off backfill in the background and return 202 + job ref.
-    db = request.app.state.db
-    new_embeddings = EmbeddingService.from_config(saved.model_dump(), db=db)
-    # Swap the app-level embeddings handle so subsequent requests use it.
-    request.app.state.embeddings = new_embeddings
-
-    # v2.5.5 (mis_01KS1RFNM2T1HTB077G507T1FR): reshape EVERY vec_* table
-    # before backfill starts. The v2.4 path reshaped vec_claims only;
-    # this version covers vec_journal/decisions/literature/missions/
-    # artifacts too, plus invalidates their stale metadata so backfill
-    # picks them up.
-    target_dim = int(
-        (saved.config or {}).get("dim")
-        or test_result.detected_dim
-        or new_embeddings.dim
-        or 768
-    )
-    reshape_results = await reshape_all_vec_tables_if_needed(db, dim=target_dim)
-
+    # Step 4: kick off missing-only/full backfill and return a job reference.
     status_obj = register_job()
     backfill_svc = BackfillService(db=db, embeddings=new_embeddings)
     background_tasks.add_task(_run_backfill_safely, backfill_svc, status_obj)
@@ -193,7 +384,7 @@ async def put_embedding_config(
             "status_url": f"/api/config/embedding/backfill/status?job_id={status_obj.job_id}",
             "reshape": {
                 table: {"did_reshape": did, "pending": pending}
-                for table, (did, pending) in reshape_results.items()
+                for table, (did, pending) in reconciliation.reshape.items()
             },
         },
     )
@@ -202,6 +393,7 @@ async def put_embedding_config(
 @router.post("/api/config/embedding/test")
 async def test_embedding_config(request: Request, body: EmbeddingConfig) -> Any:
     svc = _config_service(request)
+    body = _restore_saved_secret(svc, body)
     try:
         result = await svc.test_config(body)
     except EmbeddingConfigError as exc:
@@ -239,6 +431,24 @@ async def start_embedding_backfill(
             "no embedding backend is configured",
             "set one in Settings → Embeddings first",
         )
+    try:
+        await resume_embedding_transition(
+            db,
+            generation=getattr(embeddings, "index_generation", None),
+            space_signature=embeddings.space_signature,
+            model_name=embeddings.model_name,
+            dim=embeddings.dim,
+        )
+    except EmbeddingGenerationMismatch as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "embedding_generation_changed",
+                "detail": str(exc),
+                "hint": "restart this RKA process, then retry the backfill",
+            },
+        )
+
     types = tuple(t.strip() for t in entity_types.split(",")) if entity_types else None
     status_obj = register_job()
     svc = BackfillService(db=db, embeddings=embeddings)
@@ -283,10 +493,47 @@ async def _run_backfill_safely(
     entity_types: tuple[str, ...] | None = None,
 ) -> None:
     """Wraps BackfillService.run_backfill so unhandled exceptions land in
-    the status snapshot rather than the background-task logger."""
-    try:
-        await svc.run_backfill(status, entity_types=entity_types)
-    except Exception as exc:  # noqa: BLE001
-        status.state = "failed"
-        status.error = str(exc)
-        logger.exception("backfill job %s failed", status.job_id)
+    the status snapshot rather than the background-task logger.
+
+    The API is one writer process under ADR 0017, so a process-local lock is
+    the ownership boundary for background backfills.  Revalidate and resume
+    the bound generation only after acquiring it: a queued healthy run can
+    recover a same-generation failure, while a stale run never touches a
+    newer generation.
+    """
+    async with _BACKFILL_LOCK:
+        generation = getattr(svc._embeddings, "index_generation", None)
+        try:
+            if generation is not None:
+                await resume_embedding_transition(
+                    svc._db,
+                    generation=generation,
+                    space_signature=svc._embeddings.space_signature,
+                    model_name=svc._embeddings.model_name,
+                    dim=svc._embeddings.dim,
+                )
+            await svc.run_backfill(status, entity_types=entity_types)
+        except Exception as exc:  # noqa: BLE001
+            status.state = "failed"
+            status.error = str(exc)
+            logger.exception("backfill job %s failed", status.job_id)
+        finally:
+            if generation is not None:
+                await finish_embedding_transition(
+                    svc._db,
+                    generation=generation,
+                    success=status.state == "complete",
+                    error=status.error,
+                )
+                current = await get_embedding_index_state(svc._db)
+                if (
+                    status.state == "complete"
+                    and current is not None
+                    and current.generation == generation
+                    and current.status == "failed"
+                ):
+                    status.state = "failed"
+                    status.error = (
+                        current.last_error
+                        or "embedding index consistency check failed"
+                    )

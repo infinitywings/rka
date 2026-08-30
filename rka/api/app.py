@@ -142,42 +142,68 @@ async def lifespan(app: FastAPI):
     app.state.llm = llm
 
     embeddings: EmbeddingService | None = None
+    app.state.embedding_unavailable_reason = None
     if config.embeddings_enabled:
         # Mission D first-run hook: persist DEFAULT_CONFIG to
         # /data/embedding_config.json on first boot if it doesn't exist,
         # then load whatever's on disk through the pluggable factory.
-        # Falls back to legacy FastEmbed if the config file is corrupt or
-        # the data_dir isn't writable (e.g. test fixtures with default
-        # `/data`, read-only volume mounts).
+        # A missing file uses the documented first-run default. A corrupt
+        # existing file never selects another model implicitly: the API stays
+        # healthy in lexical mode until the operator repairs the configuration.
         from rka.services.embedding_config import (
             DEFAULT_CONFIG,
             EmbeddingConfigError,
             EmbeddingConfigService,
         )
-        from rka.services.embedding_reshape import reshape_all_vec_tables_if_needed
+        from rka.services.embedding_index import (
+            EmbeddingDimensionTransitionRequired,
+            embedding_space_signature,
+            legacy_index_adoption_safe,
+            reconcile_embedding_index,
+        )
 
         cfg_svc = EmbeddingConfigService(config_dir=config.data_dir)
         try:
-            if not cfg_svc.config_path.exists():
+            config_missing = not cfg_svc.config_path.exists()
+            if config_missing:
+                embedding_cfg = DEFAULT_CONFIG.model_copy()
                 try:
-                    cfg_svc.save_config(DEFAULT_CONFIG.model_copy(), actor="system-default")
+                    embedding_cfg = cfg_svc.save_config(
+                        embedding_cfg,
+                        actor="system-default",
+                    )
                     logger.info(
                         "first-run: persisted DEFAULT embedding config to %s",
                         cfg_svc.config_path,
                     )
                 except (OSError, EmbeddingConfigError) as exc:
-                    # data_dir not writable (e.g. read-only test fixture).
-                    # Silent fall-through to legacy FastEmbed below.
+                    # Use the exact same in-memory default; do not silently
+                    # change models because persistence is unavailable.
                     logger.warning(
                         "could not persist DEFAULT embedding config to %s: %s; "
                         "continuing with in-memory default",
                         cfg_svc.config_path,
                         exc,
                     )
+            else:
+                embedding_cfg = cfg_svc.load_config()
+
+            if not (embedding_cfg.config or {}).get("dim"):
+                probe = await cfg_svc.test_config(embedding_cfg)
+                if not probe.ok or not probe.detected_dim:
                     raise EmbeddingConfigError(
-                        "data_dir not writable; using legacy fastembed", hint=""
+                        "embedding dimension is missing and the backend probe failed",
+                        hint="repair the backend, then save the embedding configuration again",
                     )
-            embedding_cfg = cfg_svc.load_config()
+                normalized = dict(embedding_cfg.config or {})
+                normalized["dim"] = int(probe.detected_dim)
+                embedding_cfg = embedding_cfg.model_copy(update={"config": normalized})
+                if not config_missing:
+                    embedding_cfg = cfg_svc.save_config(
+                        embedding_cfg,
+                        actor="system-dimension-detect",
+                    )
+
             embeddings = EmbeddingService.from_config(embedding_cfg.model_dump(), db=db)
             logger.info(
                 "Embedding service enabled (backend=%s, dim=%d)",
@@ -185,33 +211,56 @@ async def lifespan(app: FastAPI):
                 embeddings.dim,
             )
 
-            # v2.5.5 startup-hook (mis_01KS1RFNM2T1HTB077G507T1FR): reshape
-            # every vec_* table whose dim no longer matches the configured
-            # embedding dim. The v2.4 path covered vec_claims only; the
-            # other five hardcoded float[768] tables were stuck at the old
-            # dim and their embedding_metadata kept the stale model_name.
-            target_dim = int(embedding_cfg.config.get("dim") or embeddings.dim or 768)
-            reshape_results = await reshape_all_vec_tables_if_needed(db, dim=target_dim)
-            reshaped = [(t, p) for t, (did, p) in reshape_results.items() if did]
-            if reshaped:
-                logger.info(
-                    "vec tables reshaped at startup (dim=%d): %s",
-                    target_dim,
-                    ", ".join(f"{t} pending={p}" for t, p in reshaped),
-                )
-        except EmbeddingConfigError as exc:
-            # Corrupt config OR unwritable data_dir: fall back to legacy
-            # FastEmbed so the API still starts. The Settings page renders
-            # the 422 hint on next GET.
-            logger.warning(
-                "embedding config error at startup: %s; falling back to legacy FastEmbed",
-                exc.detail,
+            target_dim = int(embedding_cfg.config.get("dim") or embeddings.dim)
+            reconciliation = await reconcile_embedding_index(
+                db,
+                space_signature=embedding_space_signature(
+                    embedding_cfg,
+                    dimensions=target_dim,
+                ),
+                model_name=embeddings.model_name,
+                dim=target_dim,
+                allow_legacy_adoption=legacy_index_adoption_safe(embedding_cfg),
             )
-            embeddings = EmbeddingService(model_name=config.embedding_model, db=db)
+            embeddings.bind_index_generation(
+                reconciliation.state.generation,
+                space_signature=reconciliation.state.space_signature,
+            )
+            if reconciliation.transitioned or reconciliation.resumed:
+                logger.info(
+                    "embedding generation %d will resume at startup (dim=%d)",
+                    reconciliation.state.generation,
+                    target_dim,
+                )
+        except (EmbeddingConfigError, EmbeddingDimensionTransitionRequired, ValueError) as exc:
+            detail = getattr(exc, "detail", str(exc))
+            logger.warning(
+                "embedding startup unavailable: %s; search will use lexical retrieval",
+                detail,
+            )
+            app.state.embedding_unavailable_reason = detail
+            embeddings = None
+    else:
+        app.state.embedding_unavailable_reason = (
+            "embeddings disabled (RKA_EMBEDDINGS_ENABLED=false)"
+        )
     app.state.embeddings = embeddings
 
     search = SearchService(db=db, embeddings=embeddings)
     app.state.search = search
+
+    if embeddings is not None:
+        # Missing-only reconciliation is cheap when the index is complete and
+        # is the restart path for an interrupted generation transition.
+        from rka.services.embedding_backfill import BackfillService, register_job
+
+        status_obj = register_job()
+        startup_backfill = BackfillService(db=db, embeddings=embeddings)
+        background_tasks.append(
+            asyncio.create_task(
+                config_routes._run_backfill_safely(startup_backfill, status_obj)
+            )
+        )
 
     context = ContextEngine(
         db=db,

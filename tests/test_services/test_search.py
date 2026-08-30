@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 import pytest_asyncio
 
@@ -112,6 +114,56 @@ class TestFTS5Search:
         results = await search_svc.search("timing", limit=20)
         types = {r.entity_type for r in results}
         assert len(types) >= 2  # Should find journal + literature + mission + decision
+
+    @pytest.mark.asyncio
+    async def test_reindexing_uses_lexical_without_query_embedding(
+        self, search_svc: SearchService
+    ):
+        class ReindexingEmbeddings:
+            embed_calls = 0
+
+            async def index_search_ready(self) -> bool:
+                return False
+
+            async def embed(self, query: str):  # pragma: no cover - must not run
+                self.embed_calls += 1
+                raise AssertionError(f"unexpected query embedding: {query}")
+
+        embeddings = ReindexingEmbeddings()
+        search_svc.embeddings = embeddings
+        search_svc._vector_search = AsyncMock()
+
+        results = await search_svc.search("timing attacks", limit=10)
+
+        assert "jrn_001" in [result.entity_id for result in results]
+        assert embeddings.embed_calls == 0
+        search_svc._vector_search.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_generation_change_after_query_embedding_skips_vector_read(
+        self, search_svc: SearchService
+    ):
+        class ChangingEmbeddings:
+            def __init__(self) -> None:
+                self.readiness = iter((True, False))
+                self.embed_calls = 0
+
+            async def index_search_ready(self) -> bool:
+                return next(self.readiness)
+
+            async def embed(self, _query: str):
+                self.embed_calls += 1
+                return [0.0] * 768
+
+        embeddings = ChangingEmbeddings()
+        search_svc.embeddings = embeddings
+        search_svc._vector_search = AsyncMock()
+
+        results = await search_svc.search("timing attacks", limit=10)
+
+        assert "jrn_001" in [result.entity_id for result in results]
+        assert embeddings.embed_calls == 1
+        search_svc._vector_search.assert_not_awaited()
 
 
 class TestQuerySanitization:

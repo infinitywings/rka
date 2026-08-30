@@ -6,7 +6,7 @@ BREAKING-IN-MINOR change: the `llm` field is removed entirely per PI
 directive jrn_01KRNZBS50K250HHHHEC58E4GC.
 
 Verified states (E2.1, additive over Mission D):
-  - The embedding block remains {available, reason_unavailable}
+  - The embedding block reports availability, reason, and active search mode
   - Core/interface versions and contract discovery are explicit
   - Unsupported requirements return an actionable 409 response
   - `llm` field is ABSENT (not null, not {available: false} — gone)
@@ -107,17 +107,18 @@ async def test_capabilities_llm_field_is_absent(api_client: httpx.AsyncClient):
 
 @pytest.mark.asyncio
 async def test_capabilities_embedding_block_shape_preserved(api_client: httpx.AsyncClient):
-    """The embedding block's shape is unchanged from Mission B Affordance C."""
+    """The embedding block keeps old fields and adds an explicit search mode."""
     r = await api_client.get("/api/capabilities")
     body = r.json()
     emb = body["embedding"]
-    assert set(emb.keys()) >= {"available", "reason_unavailable"}
+    assert set(emb.keys()) >= {"available", "reason_unavailable", "search_mode"}
     assert isinstance(emb["available"], bool)
     if emb["available"]:
         assert emb["reason_unavailable"] is None
     else:
         assert isinstance(emb["reason_unavailable"], str)
         assert len(emb["reason_unavailable"]) > 0
+        assert emb["search_mode"] == "lexical"
 
 
 @pytest.mark.asyncio
@@ -130,6 +131,44 @@ async def test_capabilities_embedding_disabled_carries_reason(api_client: httpx.
     emb = body["embedding"]
     assert emb["available"] is False
     assert "disabled" in emb["reason_unavailable"].lower()
+    assert emb["search_mode"] == "lexical"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_tracks_runtime_and_generation_degradation(
+    api_client: httpx.AsyncClient,
+):
+    class _Embeddings:
+        runtime_available = False
+        ready = True
+
+        async def index_search_ready(self) -> bool:
+            return self.ready
+
+    app = api_client._transport.app
+    assert app.state.db.vec_available is True
+    embeddings = _Embeddings()
+    app.state.embeddings = embeddings
+
+    failed = (await api_client.get("/api/capabilities")).json()
+    assert failed["embedding"]["available"] is False
+    assert failed["embedding"]["search_mode"] == "lexical"
+    assert "embedding" not in failed["available_capabilities"]
+
+    embeddings.runtime_available = True
+    embeddings.ready = False
+    rebuilding = (await api_client.get("/api/capabilities")).json()
+    assert rebuilding["embedding"]["available"] is False
+    assert rebuilding["embedding"]["search_mode"] == "lexical"
+
+    embeddings.ready = True
+    recovered = (await api_client.get("/api/capabilities")).json()
+    assert recovered["embedding"] == {
+        "available": True,
+        "reason_unavailable": None,
+        "search_mode": "hybrid",
+    }
+    assert "embedding" in recovered["available_capabilities"]
 
 
 @pytest.mark.asyncio

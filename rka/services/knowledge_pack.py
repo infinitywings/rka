@@ -215,6 +215,7 @@ _TABLE_CATEGORIES: dict[str, list[str]] = {
         "project_deletion_authorizations",
         "kv_store",
         "embedding_metadata",
+        "embedding_index_state",
     ],
     "indexes": [
         # SKIP — rebuilt automatically (vec_*, fts_* detected by prefix)

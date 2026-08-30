@@ -202,6 +202,32 @@ async def test_run_backfill_marks_failed_on_batch_embed_error(db):
 
 
 @pytest.mark.asyncio
+async def test_run_backfill_rejects_short_embedding_batch(db):
+    class ShortBatchEmbedder(FakeEmbedder):
+        async def embed_batch(
+            self,
+            texts: list[str],
+            *,
+            is_query: bool = False,
+        ) -> list[list[float]]:
+            self.calls.append(list(texts))
+            return []
+
+    clear_registry()
+    await _setup_vec_claims_at_dim(db, dim=4)
+    await _insert_journal(db, jid="jrn_t5_short_batch")
+    await _insert_pending_claims(db, jid="jrn_t5_short_batch", count=1)
+    status = register_job()
+    svc = BackfillService(db=db, embeddings=ShortBatchEmbedder(dim=4))
+
+    result = await svc.run_backfill(status, entity_types=("claim",))
+
+    assert result.state == "failed"
+    assert result.processed == 0
+    assert "returned 0 vectors for 1 inputs" in (result.error or "")
+
+
+@pytest.mark.asyncio
 async def test_run_backfill_resumes_remaining_after_partial_completion(db):
     """If a backfill fails mid-stream, a second run picks up the remainder.
 
@@ -644,10 +670,12 @@ async def test_metadata_not_written_when_vec_available_false(db, monkeypatch):
     svc = BackfillService(db=db, embeddings=FakeEmbedder(dim=4), batch_size=3)
     result = await svc.run_backfill(status, entity_types=("claim",))
 
-    # The backfill reports the rows as "processed" (they completed without
-    # error), but the metadata table receives NO inserts because the
-    # vec_available guard skipped both the vec_* and metadata writes.
-    assert result.state == "complete"
+    # Fail explicitly before calling the backend. A false "complete" result
+    # would strand a durable reindex generation while no vectors can be stored.
+    assert result.state == "failed"
+    assert "sqlite-vec" in (result.error or "")
+    assert result.processed == 0
+    assert svc._embeddings.calls == []
     metadata_rows = await db.fetchone(
         "SELECT COUNT(*) AS n FROM embedding_metadata "
         "WHERE entity_type = 'claim' AND entity_id IN "

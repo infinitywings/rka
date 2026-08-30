@@ -29,13 +29,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any
 
 import httpx
 
 from rka.infra.embedding_backends.base import (
     ConnectionTestResult,
-    EmbeddingConfigError,
     reconcile_dim,
 )
 
@@ -55,6 +53,9 @@ class OpenAICompatBackend:
         api_key: str | None = None,
         dim: int | None = None,
         timeout_seconds: float = 600.0,
+        query_template: str = "{text}",
+        document_template: str = "{text}",
+        embedding_space_id: str | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         if not base_url:
@@ -68,6 +69,11 @@ class OpenAICompatBackend:
         # first real call detects a different length.
         self._dim: int = dim or 0
         self._timeout = timeout_seconds
+        self._query_template = self._validate_template("query_template", query_template)
+        self._document_template = self._validate_template("document_template", document_template)
+        if embedding_space_id is not None and not isinstance(embedding_space_id, str):
+            raise ValueError("embedding_space_id must be a string")
+        self._embedding_space_id = (embedding_space_id or "").strip() or None
         self._http = http_client
 
     @property
@@ -76,7 +82,25 @@ class OpenAICompatBackend:
 
     @property
     def model_name(self) -> str:
-        return self._model
+        # The transport model is what the HTTP server accepts. An explicit
+        # embedding-space id is what RKA stores in embedding metadata so App
+        # can include artifact hash, pooling, normalization, and document
+        # encoding without teaching Core about any one model runtime.
+        return self._embedding_space_id or self._model
+
+    @staticmethod
+    def _validate_template(name: str, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be a string")
+        if value.count("{text}") != 1:
+            raise ValueError(f"{name} must contain exactly one {{text}} placeholder")
+        return value
+
+    def _prepare(self, text: str, *, is_query: bool) -> str:
+        template = self._query_template if is_query else self._document_template
+        # Literal replacement is intentional. This is not a general-purpose
+        # Python format string, so record text cannot be interpreted as syntax.
+        return template.replace("{text}", text)
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -123,28 +147,49 @@ class OpenAICompatBackend:
             resp.raise_for_status()
             payload = resp.json()
             data = payload.get("data") or []
-            vecs = [item["embedding"] for item in data]
-            if vecs:
-                # T2.5 calibration: drift-check rather than silent mutate.
-                # `reconcile_dim` returns the new self._dim (or raises on
-                # drift when self._dim was already non-zero).
-                self._dim = reconcile_dim(self._dim, len(vecs[0]))
-            return vecs
+            if len(data) != len(inputs):
+                raise ValueError(
+                    "openai_compat returned "
+                    f"{len(data)} embeddings for {len(inputs)} inputs"
+                )
+            indexed: dict[int, list[float]] = {}
+            for item in data:
+                index = item.get("index")
+                if (
+                    not isinstance(index, int)
+                    or isinstance(index, bool)
+                    or index < 0
+                    or index >= len(inputs)
+                    or index in indexed
+                ):
+                    raise ValueError(
+                        f"openai_compat returned invalid embedding index: {index!r}"
+                    )
+                vector = item.get("embedding")
+                if not isinstance(vector, list) or not vector:
+                    raise ValueError(
+                        f"openai_compat returned no vector for input index {index}"
+                    )
+                # T2.5 calibration: drift-check every vector, not only the
+                # first item in a batch.
+                self._dim = reconcile_dim(self._dim, len(vector))
+                indexed[index] = vector
+            return [indexed[index] for index in range(len(inputs))]
         # unreachable — every loop branch either returns or raises
         if last_exc:
             raise last_exc
         raise RuntimeError("openai_compat embed: exhausted retries")
 
-    async def embed(self, text: str, *, is_query: bool = False) -> list[float]:  # noqa: ARG002
-        out = await self._post_embeddings([text])
+    async def embed(self, text: str, *, is_query: bool = False) -> list[float]:
+        out = await self._post_embeddings([self._prepare(text, is_query=is_query)])
         return out[0]
 
-    async def embed_batch(
-        self, texts: list[str], *, is_query: bool = False  # noqa: ARG002
-    ) -> list[list[float]]:
+    async def embed_batch(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
         if not texts:
             return []
-        return await self._post_embeddings(list(texts))
+        return await self._post_embeddings(
+            [self._prepare(text, is_query=is_query) for text in texts]
+        )
 
     async def test_connection(self) -> ConnectionTestResult:
         t0 = time.perf_counter()

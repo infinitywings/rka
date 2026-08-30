@@ -454,6 +454,12 @@ export interface EmbeddingConfig {
     model_name?: string
     api_key?: string
     dim?: number
+    timeout_seconds?: number
+    query_template?: string
+    document_template?: string
+    embedding_space_id?: string
+    threads?: number
+    cache_dir?: string
   }
   updated_at?: string | null
   updated_by?: string | null

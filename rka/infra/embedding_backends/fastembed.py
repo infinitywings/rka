@@ -5,7 +5,8 @@ Preserves the prior production semantics exactly:
 
   - `nomic-ai/nomic-embed-text-v1.5` default model (768-dim)
   - `search_query: ` / `search_document: ` prefixes on Nomic-family models
-  - first-use download (~130 MB) is performed lazily inside the model
+  - first-use download (~520 MB for the non-quantized default) is performed
+    lazily inside the model
     accessor; the FastEmbed library handles caching
 """
 
@@ -19,7 +20,6 @@ from typing import Any
 
 from rka.infra.embedding_backends.base import (
     ConnectionTestResult,
-    EmbeddingConfigError,
     reconcile_dim,
 )
 
@@ -69,7 +69,7 @@ class FastEmbedBackend:
         self._threads = max(1, threads)
         # v2.7.0.1: persistent model cache. When unset, fastembed defaults to
         # ~/.cache/fastembed which doesn't survive container recreate, causing
-        # repeated 130MB downloads (and HF rate-limiting under load). Setting
+        # repeated model downloads (and HF rate-limiting under load). Setting
         # cache_dir to a volume-mounted path eliminates this.
         if cache_dir is None:
             cache_dir = os.getenv("RKA_EMBEDDING_CACHE_DIR") or None
@@ -96,7 +96,7 @@ class FastEmbedBackend:
 
             logger.info(
                 "Loading FastEmbed model: %s (threads=%d, cache_dir=%s; "
-                "first uncached load downloads ~130MB)",
+                "first uncached load downloads ~520MB for the default model)",
                 self._model_name,
                 self._threads,
                 self._cache_dir or "<fastembed default>",

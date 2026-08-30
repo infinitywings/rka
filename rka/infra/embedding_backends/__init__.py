@@ -68,6 +68,10 @@ def make_backend(config: dict[str, Any]) -> EmbeddingBackend:
             model=sub.get("model") or "",
             api_key=sub.get("api_key"),
             dim=sub.get("dim"),
+            timeout_seconds=float(sub.get("timeout_seconds", 600.0)),
+            query_template=sub.get("query_template", "{text}"),
+            document_template=sub.get("document_template", "{text}"),
+            embedding_space_id=sub.get("embedding_space_id"),
         )
     if backend_kind == "ollama":
         from rka.infra.embedding_backends.ollama import OllamaBackend
@@ -76,6 +80,7 @@ def make_backend(config: dict[str, Any]) -> EmbeddingBackend:
             base_url=sub.get("base_url") or "http://host.docker.internal:11434",
             model=sub.get("model") or "",
             dim=sub.get("dim"),
+            timeout_seconds=float(sub.get("timeout_seconds", 600.0)),
         )
     raise ValueError(
         f"unknown embedding backend: {backend_kind!r} "

@@ -323,14 +323,47 @@ async def ensure_vec_table_partitions(db: Any) -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 
 
-async def reshape_vec_table(db: Any, table_name: str, *, dim: int) -> int:
+async def embedding_space_mismatch(
+    db: Any,
+    *,
+    model_name: str,
+    dim: int,
+) -> bool:
+    """Return whether stored metadata belongs to a different vector space.
+
+    This is the restart-safe half of config migration. A process can stop after
+    the new config is atomically saved but before PUT rebuilds the tables. On
+    the next boot, dimensions alone are insufficient because two models can
+    share a dimension. Any old metadata therefore forces one clean rebuild.
+    """
+    if not getattr(db, "vec_available", False):
+        return False
+    row = await db.fetchone(
+        """SELECT 1 AS mismatch
+           FROM embedding_metadata
+           WHERE model_name <> ? OR dimensions <> ?
+           LIMIT 1""",
+        [model_name, dim],
+    )
+    return row is not None
+
+
+async def reshape_vec_table(
+    db: Any,
+    table_name: str,
+    *,
+    dim: int,
+    force: bool = False,
+) -> int:
     """Drop + recreate `table_name` at `dim`; mark its entities pending.
 
     Returns the count of entities in the corresponding entity table
     (claims for vec_claims, journal for vec_journal, etc.) — the same
     number that `needs_reembed` will report True for until backfill
     repopulates them. Safe to call when the table is already at `dim`
-    (idempotent fast-path: skip drop, return current pending count).
+    (idempotent fast-path: skip drop, return current pending count), unless
+    `force=True`. A forced rebuild is used when model/input-space identity
+    changes without a dimension change, preventing mixed-space vectors.
 
     Pending-signal logic per entity type:
       - `vec_claims`: `UPDATE claims SET embedding_pending = 1`
@@ -359,11 +392,25 @@ async def reshape_vec_table(db: Any, table_name: str, *, dim: int) -> int:
         return await _count_entity_rows(db, entities)
 
     existing_dim = await current_vec_table_dim(db, table_name)
-    if existing_dim == dim:
+    if existing_dim == dim and not force:
         logger.info(
             "reshape_vec_table: %s already at dim=%d; no-op", table_name, dim
         )
         return await _count_pending(db, table_name, entities)
+
+    if existing_dim == dim and force:
+        # A document-space change at the same dimension only needs an index
+        # reset.  Preserve the vec0 schema so already-running API/worker
+        # connections never observe a DROP/CREATE invalidation.
+        logger.info(
+            "reshape_vec_table: clearing %s at unchanged dim=%d",
+            table_name,
+            dim,
+        )
+        async with db.transaction():
+            await db.execute(f"DELETE FROM {table_name}")
+            await _mark_pending(db, table_name, entities)
+        return await _count_entity_rows(db, entities)
 
     logger.info(
         "reshape_vec_table: dropping %s (was dim=%s) and recreating at dim=%d",
@@ -383,7 +430,10 @@ async def reshape_vec_table(db: Any, table_name: str, *, dim: int) -> int:
 
 
 async def reshape_all_vec_tables_if_needed(
-    db: Any, *, dim: int
+    db: Any,
+    *,
+    dim: int,
+    force: bool = False,
 ) -> dict[str, tuple[bool, int]]:
     """Iterate every known vec_* table; reshape-if-needed; return per-table outcome.
 
@@ -395,11 +445,11 @@ async def reshape_all_vec_tables_if_needed(
     for tbl in _VEC_TABLE_NAMES:
         entities = _TABLE_TO_ENTITIES[tbl]
         existing_dim = await current_vec_table_dim(db, tbl)
-        if existing_dim == dim:
+        if existing_dim == dim and not force:
             pending = await _count_pending(db, tbl, entities)
             out[tbl] = (False, pending)
         else:
-            pending = await reshape_vec_table(db, tbl, dim=dim)
+            pending = await reshape_vec_table(db, tbl, dim=dim, force=force)
             out[tbl] = (True, pending)
     return out
 
@@ -441,13 +491,18 @@ async def _mark_pending(
 ) -> None:
     """Flip the pending signal for every entity of this type.
 
-    `vec_claims` keeps the v2.4 `embedding_pending` flag pattern (the
-    BackfillService cursor reads it directly); the other six use
-    metadata-absence as the signal.
+    `vec_claims` keeps the legacy `embedding_pending` flag for readers that
+    still inspect it. Every entity type, including claims, also deletes
+    embedding metadata because metadata absence is the authoritative pending
+    signal used by the current backfill cursor.
     """
     if table_name == "vec_claims":
-        _entity_type, entity_table = entities[0]
+        entity_type, entity_table = entities[0]
         await db.execute(f"UPDATE {entity_table} SET embedding_pending = 1")
+        await db.execute(
+            "DELETE FROM embedding_metadata WHERE entity_type = ?",
+            [entity_type],
+        )
     else:
         for entity_type, _entity_table in entities:
             await db.execute(

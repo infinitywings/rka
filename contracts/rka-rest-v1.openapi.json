@@ -2646,6 +2646,14 @@
                 "type": "null"
               }
             ]
+          },
+          "search_mode": {
+            "default": "lexical",
+            "enum": [
+              "hybrid",
+              "lexical"
+            ],
+            "type": "string"
           }
         },
         "required": [

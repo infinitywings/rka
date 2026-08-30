@@ -387,6 +387,42 @@ _ENTITY_BACKFILL_CONFIGS: dict[str, _EntityBackfillConfig] = {
 _DEFAULT_ENTITY_TYPES: tuple[str, ...] = tuple(_ENTITY_BACKFILL_CONFIGS.keys())
 
 
+async def stored_metadata_hashes_match(
+    db: Any,
+    *,
+    model_name: str,
+    dimensions: int,
+) -> bool:
+    """Verify legacy metadata hashes against the current canonical text.
+
+    This bounded seven-query scan is used only while adopting a pre-generation
+    index. It avoids either trusting stale vectors or needlessly discarding a
+    healthy existing installation.
+    """
+
+    from rka.infra.embeddings import EmbeddingService
+
+    for entity_type, cfg in _ENTITY_BACKFILL_CONFIGS.items():
+        rows = await db.fetchall(
+            f"""SELECT s.*, m.content_hash AS _embedding_content_hash
+                FROM {cfg.source_table} s
+                JOIN embedding_metadata m
+                  ON m.project_id = s.project_id
+                 AND m.entity_type = ?
+                 AND m.entity_id = s.{cfg.id_column}
+                WHERE m.model_name = ? AND m.dimensions = ?""",
+            [entity_type, model_name, dimensions],
+        )
+        for row in rows:
+            try:
+                text = cfg.compose_text(row)
+            except Exception:  # noqa: BLE001
+                return False
+            if row["_embedding_content_hash"] != EmbeddingService.content_hash(text):
+                return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # BackfillService
 # ---------------------------------------------------------------------------
@@ -442,6 +478,12 @@ class BackfillService:
         five entity types so the upper-bound batch is somewhat larger.
         """
         status.state = "running"
+
+        if not bool(getattr(self._db, "vec_available", False)):
+            status.state = "failed"
+            status.error = "sqlite-vec is unavailable; embedding backfill was not run"
+            await _emit_progress(progress_callback, status)
+            return status
 
         if entity_types is None:
             types = _DEFAULT_ENTITY_TYPES
@@ -522,6 +564,7 @@ class BackfillService:
         embed_dim: int = int(getattr(self._embeddings, "dim", 0) or 0)
 
         last_id = ""
+        write_errors: list[str] = []
         while True:
             rows = await self._db.fetchall(
                 cfg.pending_cursor_sql,
@@ -561,6 +604,11 @@ class BackfillService:
                     f"(cursor at {last_id}): "
                     f"{type(exc).__name__}: {exc!s}"
                 ) from exc
+            if len(vectors) != len(work):
+                raise _BackfillBatchError(
+                    f"(cursor at {last_id}): backend returned "
+                    f"{len(vectors)} vectors for {len(work)} inputs"
+                )
 
             # Per-row: write vec_* + embedding_metadata + post_embed.
             #
@@ -591,6 +639,13 @@ class BackfillService:
                     if vec_available:
                         vec_blob = struct.pack(f"{len(vec)}f", *vec)
                         async with self._db.transaction():
+                            generation_guard = getattr(
+                                self._embeddings,
+                                "assert_current_generation",
+                                None,
+                            )
+                            if generation_guard is not None:
+                                await generation_guard()
                             # sqlite-vec's vec0 tables do not honour the
                             # REPLACE conflict clause — re-embedding an entity
                             # that already has a vector raises "UNIQUE
@@ -654,8 +709,15 @@ class BackfillService:
                         "%s %s vec-write failed (leaving pending for retry): %s",
                         cfg.entity_type, entity_id, exc,
                     )
+                    write_errors.append(f"{entity_id}: {type(exc).__name__}: {exc!s}")
 
             await _emit_progress(progress_callback, status)
+
+        if write_errors:
+            sample = "; ".join(write_errors[:3])
+            if len(write_errors) > 3:
+                sample += f"; and {len(write_errors) - 3} more"
+            raise _BackfillBatchError(f"vector writes failed: {sample}")
 
 
 async def _emit_progress(
