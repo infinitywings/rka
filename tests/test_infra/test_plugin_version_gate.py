@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -72,7 +73,7 @@ class TestGateDirection:
         2.9.0 while the allowlist still read ("2.7", "2.8").
         """
         pyproject = (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text()
-        line = next(l for l in pyproject.splitlines() if l.startswith("version"))
+        line = next(candidate for candidate in pyproject.splitlines() if candidate.startswith("version"))
         shipped = line.split("=", 1)[1].strip().strip('"').strip("'")
         parsed = bridge.parse_version(shipped)
         assert parsed is not None, f"unparseable version in pyproject.toml: {shipped!r}"
@@ -82,25 +83,54 @@ class TestGateDirection:
         )
 
 
-def _run_bridge(tmp_path: Path, version: str | None) -> subprocess.CompletedProcess:
+class TestCrossPlatformPaths:
+    def test_windows_uses_appdata(self, monkeypatch, tmp_path: Path):
+        monkeypatch.delenv("RKA_INTEGRATION_FILE", raising=False)
+        monkeypatch.setattr(bridge.sys, "platform", "win32")
+        monkeypatch.setenv("APPDATA", str(tmp_path))
+        assert bridge.integration_path() == tmp_path / "RKA" / "integration.json"
+
+    def test_linux_honors_xdg_data_home(self, monkeypatch, tmp_path: Path):
+        monkeypatch.delenv("RKA_INTEGRATION_FILE", raising=False)
+        monkeypatch.setattr(bridge.sys, "platform", "linux")
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+        assert bridge.integration_path() == tmp_path / "RKA" / "integration.json"
+
+    def test_explicit_path_override_is_portable(self, monkeypatch, tmp_path: Path):
+        expected = tmp_path / "custom-integration.json"
+        monkeypatch.setenv("RKA_INTEGRATION_FILE", str(expected))
+        assert bridge.integration_path() == expected
+
+
+def _run_bridge(
+    tmp_path: Path,
+    backend_version: str | None = None,
+    *,
+    legacy_version: str | None = None,
+) -> subprocess.CompletedProcess:
     # A real executable is required: the bridge checks that binary_path is
     # runnable *before* it looks at the version, so a bogus path would exit
     # early and never reach the gate under test.
-    stub = tmp_path / "rka-stub"
-    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub = tmp_path / "rka-stub.py"
+    stub.write_text("import sys\nsys.exit(0)\n")
     stub.chmod(0o755)
 
     integration = tmp_path / "integration.json"
-    payload: dict[str, object] = {"binary_path": str(stub)}
-    if version is not None:
-        payload["version"] = version
+    payload: dict[str, object] = {
+        "schema_version": "rka.integration/v1",
+        "binary_path": str(stub),
+    }
+    if backend_version is not None:
+        payload["backend_version"] = backend_version
+    if legacy_version is not None:
+        payload["version"] = legacy_version
     integration.write_text(json.dumps(payload))
     return subprocess.run(
         [sys.executable, str(_BRIDGE)],
         input="",
         capture_output=True,
         text=True,
-        env={"PATH": "/usr/bin:/bin", "RKA_INTEGRATION_FILE": str(integration)},
+        env={**os.environ, "RKA_INTEGRATION_FILE": str(integration)},
     )
 
 
@@ -132,3 +162,15 @@ class TestEndToEnd:
         result = _run_bridge(tmp_path, "dev")
         assert "skipping the compatibility check" in result.stderr
         assert "older than this plugin supports" not in result.stderr
+
+    def test_legacy_schema_version_is_not_mistaken_for_backend(self, tmp_path: Path):
+        """The old docs called `version` the file schema version; never gate on it."""
+        result = _run_bridge(tmp_path, legacy_version="2.7.0")
+        assert result.returncode == 0, result.stderr
+        assert "ambiguous legacy `version` field" in result.stderr
+        assert "older than this plugin supports" not in result.stderr
+
+    def test_explicit_backend_version_wins_over_legacy_field(self, tmp_path: Path):
+        result = _run_bridge(tmp_path, "3.0.0", legacy_version="2.7.0")
+        assert result.returncode == 0, result.stderr
+        assert "ambiguous legacy `version` field" not in result.stderr

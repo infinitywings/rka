@@ -155,29 +155,39 @@ The intended integration is an explicit, testable crosswalk—not a lossy text e
 
 ## Quick start
 
-### 1. Start RKA
+### 1. Install and start RKA
 
-Prerequisite: [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+Prerequisites: Git, Python 3, [uv](https://docs.astral.sh/uv/getting-started/installation/), and Docker with the Compose v2 plugin (`docker compose version` must work). Docker Desktop includes Compose on macOS, Windows, and Linux; Linux users may instead install Docker Engine plus the Compose plugin.
+
+macOS or Linux:
 
 ```bash
 git clone https://github.com/rka-project/rka-core.git
 cd rka-core
 docker compose up -d
+uv tool install --force --reinstall .
+~/.local/bin/rka --version
+curl http://127.0.0.1:9712/api/health
 ```
 
-Open [http://localhost:9712](http://localhost:9712). The interactive REST documentation is available at [http://localhost:9712/docs](http://localhost:9712/docs).
+Windows PowerShell:
 
-### 2. Install the MCP client
-
-Install the small local RKA binary so an MCP-compatible AI client can reach the running service:
-
-```bash
-UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\Code" | Out-Null
+Set-Location "$env:USERPROFILE\Code"
+git clone https://github.com/rka-project/rka-core.git
+Set-Location rka-core
+docker compose up -d
+uv tool install --force --reinstall .
+& "$env:USERPROFILE\.local\bin\rka.exe" --version
+Invoke-RestMethod http://127.0.0.1:9712/api/health
 ```
 
-The binary is installed at `~/.local/bin/rka`. Client-specific configuration, verification, upgrades, and troubleshooting are documented in [INSTALL.md](INSTALL.md).
+Open [http://127.0.0.1:9712](http://127.0.0.1:9712). The interactive REST documentation is at [http://127.0.0.1:9712/docs](http://127.0.0.1:9712/docs). The MCP binary is `~/.local/bin/rka` on macOS/Linux and `%USERPROFILE%\.local\bin\rka.exe` on Windows. Client-specific Claude and Codex configuration, upgrades, and troubleshooting are documented in [INSTALL.md](INSTALL.md).
 
-### 3. Begin a project
+> The first uncached FastEmbed startup downloads the embedding model. During that download or a generation rebuild after an upgrade/import, health remains available but semantic search can temporarily fall back to lexical retrieval. Check Settings for indexing progress before judging retrieval quality.
+
+### 2. Begin a project
 
 After connecting a client, ask it to list or create an RKA project and state the selected project at the beginning of the session. Every project-scoped operation uses an explicit project ID so work cannot silently land in the wrong project.
 

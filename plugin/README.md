@@ -6,7 +6,7 @@
 
 This is the official Claude Code plugin for [RKA](https://github.com/rka-project/rka-core). It lives inside the upstream RKA Core repository at `plugin/`, distributed via the local marketplace at `.claude-plugin/marketplace.json` in the repo root.
 
-> **Quick install** — see [INSTALL.md at the repo root](../INSTALL.md). The TL;DR: clone the rka repo, `docker compose up -d`, then in Claude Code: `/plugin marketplace add /path/to/cloned/rka` followed by `/plugin install rka@rka`.
+> **Quick install** — see [INSTALL.md at the repo root](../INSTALL.md). The TL;DR: install Git, Python 3, uv, and Docker Compose v2; clone the repo; run `docker compose up -d` and `uv tool install --force --reinstall .`; then in Claude Code run `/plugin marketplace add /path/to/cloned/rka` followed by `/plugin install rka@rka`.
 
 ---
 
@@ -48,9 +48,9 @@ Microsoft Store install vs standalone `.exe` install of Claude Desktop on Window
 
 ## Prerequisites
 
-- **RKA backend running** — Docker via `docker compose up -d` from the rka repo. Verify with `curl http://localhost:9712/api/health`.
+- **RKA backend running** — Docker via `docker compose up -d` from the rka repo. Verify with `curl http://127.0.0.1:9712/api/health` on macOS/Linux or `Invoke-RestMethod http://127.0.0.1:9712/api/health` in Windows PowerShell.
 - **`rka` stdio binary OR `integration.json`** — the wrapper script needs one of:
-  1. `integration.json` written by RKA.app (future v2.4+; not yet shipped) at the OS-specific path above, with `binary_path` pointing at a working `rka` binary, OR
+  1. An optional `integration.json` written by a launcher/native app at the OS-specific path above, with `binary_path` pointing at a working `rka` binary and an explicit `backend_version`, OR
   2. `rka` on `PATH` (install via `uv tool install --force --reinstall .` from the rka repo — lands at `~/.local/bin/rka` on macOS/Linux, `%USERPROFILE%\.local\bin\rka.exe` on Windows).
 
   If neither is present, the wrapper exits with a clear error pointing at both options.
@@ -82,7 +82,7 @@ For natural-language equivalents, the `rka:rka-pi` skill teaches Claude Code to 
 |---|---|---|
 | 2.0.0 (this branch) | 3.0.0 or newer | minimum `3.0.0` |
 
-If RKA's backend version is outside the wrapper's compatibility glob, the wrapper exits with a clear error message. Either upgrade the backend or downgrade the plugin to a matching version.
+If an explicit `integration.json.backend_version` is below the minimum, the wrapper exits with a clear error message. A missing metadata file does not block startup; the wrapper resolves the installed binary directly.
 
 ---
 
@@ -100,6 +100,6 @@ For Claude Desktop, the wrapper picks up changes automatically (no install step)
 
 ## Provenance
 
-This plugin was scaffolded as part of the empirical-verification probe for plugin architecture (mission `mis_01KQNN8YZG7A4ZAGDCQ8ZVA97Z`, decision `dec_01KQNPC7A683HK0KRX1PAGNNED` — Option B: wrapper exec's local stdio binary, no HTTP MCP bridge). The probe's findings shape the v1.0 design; future v2.4 RKA.app will automate the setup currently handled by `/rka-setup-claude-desktop`. Both ids are RKA knowledge-base entities; query them via any RKA tool (e.g., `mcp__plugin_rka_rka__rka_get(id="dec_01KQNPC7A683HK0KRX1PAGNNED")` from a Claude session, or visit the corresponding entity in the web dashboard at `http://localhost:9712`).
+This plugin was scaffolded as part of the empirical-verification probe for plugin architecture (mission `mis_01KQNN8YZG7A4ZAGDCQ8ZVA97Z`, decision `dec_01KQNPC7A683HK0KRX1PAGNNED` — Option B: wrapper exec's local stdio binary, no HTTP MCP bridge). The probe's findings shape the v1.0 design; a future native launcher may automate the setup currently handled by `/rka-setup-claude-desktop`. Both ids are RKA knowledge-base entities; query them through the RKA dispatch surface or visit the corresponding entity in the web dashboard at `http://127.0.0.1:9712`.
 
 Upstream RKA Core: [github.com/rka-project/rka-core](https://github.com/rka-project/rka-core)

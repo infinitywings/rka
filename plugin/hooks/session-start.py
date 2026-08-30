@@ -54,8 +54,8 @@ def main() -> None:
             )
             sys.exit(0)
 
-        api_url = (data.get("api_endpoint_url") or "http://localhost:9712").strip()
-        version_str = (data.get("version") or "unknown").strip()
+        api_url = (data.get("api_endpoint_url") or "http://127.0.0.1:9712").strip()
+        version_str = (data.get("backend_version") or data.get("version") or "unknown").strip()
 
     health_url = api_url.rstrip("/") + "/api/health"
     try:

@@ -246,35 +246,49 @@ Entities are connected by typed links that form provenance chains:
 
 ## Chapter 5: Installation & Setup
 
-### 5.1 — Docker (Recommended)
+### 5.1 — Start the Docker backend
 
-Docker is the simplest way to run RKA. It requires no Python environment, no Node.js, and no local LLM.
+Docker is the simplest way to run RKA. Install Git, Python 3, [uv](https://docs.astral.sh/uv/getting-started/installation/), and Docker with Compose v2 first. Docker Desktop includes Compose on macOS, Windows, and Linux; Linux can instead use Docker Engine plus the Compose plugin. Verify `docker compose version` before continuing.
 
-**Prerequisites:** Docker Desktop ([docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/))
+macOS or Linux:
 
 ```bash
 git clone https://github.com/rka-project/rka-core.git
 cd rka-core
 docker compose up -d
+curl http://127.0.0.1:9712/api/health
 ```
 
-Open `http://localhost:9712` in your browser. That's it.
+Windows PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\Code" | Out-Null
+Set-Location "$env:USERPROFILE\Code"
+git clone https://github.com/rka-project/rka-core.git
+Set-Location rka-core
+docker compose up -d
+Invoke-RestMethod http://127.0.0.1:9712/api/health
+```
+
+Open `http://127.0.0.1:9712` in your browser.
+
+The default FastEmbed model downloads roughly 520 MB on its first uncached use. The API can become healthy before that download or a post-upgrade generation rebuild finishes; semantic search falls back to lexical retrieval until the new generation is ready. Check **Settings → Embeddings** for progress.
 
 ### 5.2 — Install the MCP binary
 
-Both Claude Desktop and Claude Code reach RKA through the same `rka` stdio binary. Install it once outside Docker:
+Claude Desktop, Claude Code, Codex, and other local MCP clients reach RKA through the same `rka` stdio binary. From the cloned `rka-core` directory, install it once outside Docker:
 
-```bash
-UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
+```text
+uv tool install --force --reinstall .
 ```
 
-The binary lands at `~/.local/bin/rka`. Verify with `~/.local/bin/rka --version`.
+Verify with `~/.local/bin/rka --version` on macOS/Linux or `& "$env:USERPROFILE\.local\bin\rka.exe" --version` in Windows PowerShell. If that path is absent, run `uv tool dir --bin` and use the absolute path it reports.
 
-### 5.3 — Register the MCP server in Claude Desktop and Claude Code
+### 5.3 — Register the MCP server in Claude or Codex
 
-The same JSON config shape works for both clients. Replace `<your-username>` with your actual macOS username (the path must be absolute). Project scope is not stored in this process configuration: every project-scoped operation requires an explicit `project_id`.
+Claude Desktop and Claude Code use the same JSON server shape. Replace `command` with the absolute binary path for the current OS: `/Users/<you>/.local/bin/rka`, `/home/<you>/.local/bin/rka`, or `C:\\Users\\<you>\\.local\\bin\\rka.exe`. Project scope is not stored in process configuration: every project-scoped operation requires an explicit `project_id`.
 
-**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows, or `~/.config/Claude/claude_desktop_config.json` on Linux:
 
 ```json
 {
@@ -287,13 +301,24 @@ The same JSON config shape works for both clients. Replace `<your-username>` wit
 }
 ```
 
-Save and **fully quit Claude Desktop** (Cmd+Q on macOS) then reopen. RKA tools will be available in any new conversation.
+Save and fully quit Claude Desktop (Cmd+Q on macOS, Quit from the tray on Windows, or the desktop environment's Quit action on Linux), then reopen it. RKA tools will be available in a new conversation.
 
 **Claude Code** — same JSON shape, in `.claude/mcp.json` (per-project) or `~/.claude/settings.json` under the same `mcpServers` key (user-level), or via the VS Code extension's **MCP Servers** UI.
 
+**Codex** — edit `~/.codex/config.toml` (or a trusted project's `.codex/config.toml`):
+
+```toml
+[mcp_servers.rka]
+command = "/absolute/path/to/.local/bin/rka"
+args = ["mcp"]
+cwd = "/absolute/path/to/rka-core"
+```
+
+On Windows, use TOML literal strings such as `command = 'C:\Users\<you>\.local\bin\rka.exe'`. Fully restart the client or open a fresh task after changing its MCP configuration. The complete platform-specific procedure is in [`INSTALL.md`](../INSTALL.md).
+
 To find your project id: run `rka_query(args={"operation": "list_projects"})` in any Claude session, or open `http://localhost:9712` and read the id from the URL when you switch projects.
 
-> **After Code Changes:** Always run `UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall .` (update MCP binary) then `docker compose up -d --build` (update server). Plain `uv tool install --force .` uses cached wheels and may NOT pick up changes.
+> **After Code Changes:** Always run `uv tool install --force --reinstall .` (update MCP binary) then `docker compose up -d --build` (update server). Fully restart connected MCP clients after the binary changes.
 
 ### 5.4 — Using RKA from ChatGPT (Custom Connector)
 
@@ -329,7 +354,7 @@ RKA supports multiple isolated projects. When you first start RKA, a default pro
 
 ## Chapter 7: The Session Protocol
 
-> **Dispatch shape (v2.7.0+).** The calls below are shown as dispatch operations: reads go through `rka_query(operation="…")` and writes through `rka_execute(operation="…")`, with `project_id` threaded on every call. See the Chapter 16 banner for the full legacy-name → operation mapping and the `rka_describe` lookup.
+> **Dispatch shape (v2.7.0+).** The calls below use the real MCP schema: reads go through `rka_query(args={"operation":"…", ...})` and writes through `rka_execute(args={"operation":"…", ...})`, with `project_id` inside `args` on every scoped call. See the Chapter 16 banner for the full legacy-name → operation mapping and the `rka_describe` lookup.
 
 ### 7.1 — Brain Session Start
 
@@ -337,9 +362,9 @@ Every Brain session should begin with these steps. The `RKA_INSTRUCTIONS` tell t
 
 | Step | Tool Call | Purpose |
 |------|-----------|---------|
-| 1 | `rka_query(operation="status")` | Load project phase, summary, metrics |
-| 2 | `rka_query(operation="context", query="current work")` | Load recent knowledge relevant to the current focus |
-| 3 | `rka_query(operation="pending_maintenance")` | Check for provenance gaps, untagged entries, orphaned clusters |
+| 1 | `rka_query(args={"operation":"status","project_id":"prj_…"})` | Load project phase, summary, metrics |
+| 2 | `rka_query(args={"operation":"context","project_id":"prj_…","query":"current work"})` | Load recent knowledge relevant to the current focus |
+| 3 | `rka_query(args={"operation":"pending_maintenance","project_id":"prj_…"})` | Check for provenance gaps, untagged entries, orphaned clusters |
 | 4 | *(silent processing)* | Tag entries, add links, extract claims — up to 10 items |
 | 5 | Greet the user | Begin the actual conversation |
 
@@ -349,9 +374,9 @@ Every Brain session should begin with these steps. The `RKA_INSTRUCTIONS` tell t
 
 | Step | Tool Call | Purpose |
 |------|-----------|---------|
-| 1 | `rka_query(operation="mission")` | Load the current assigned mission with tasks |
-| 2 | Read mission context links | Use `rka_query(operation="entity", id=…)` on `motivated_by_decision`, related journal/literature |
-| 3 | `rka_query(operation="context", query="<mission topic>")` | Load relevant prior knowledge |
+| 1 | `rka_query(args={"operation":"mission","project_id":"prj_…"})` | Load the current assigned mission with tasks |
+| 2 | Read mission context links | Use `rka_query(args={"operation":"entity","project_id":"prj_…","id":…})` on `motivated_by_decision`, related journal/literature |
+| 3 | `rka_query(args={"operation":"context","project_id":"prj_…","query":"<mission topic>"})` | Load relevant prior knowledge |
 
 ### 7.3 — Recording Standards
 
@@ -359,10 +384,10 @@ When creating entities, always provide provenance links:
 
 | Situation | Operation | Required Links |
 |-----------|-----------|----------------|
-| Making a decision | `rka_execute(operation="record_decision")` | `related_journal` (what evidence?), `related_literature` (what papers?) |
-| Creating a mission | `rka_execute(operation="create_mission")` | `motivated_by_decision` (which decision spawned this?) |
-| Recording a finding | `rka_execute(operation="record_note")` | `related_decisions`, `related_mission`, `related_literature` (nested under `provenance={…}`) |
-| Finishing a mission | `rka_execute(operation="submit_report")` | `related_decisions` (which decisions do the results bear on?) |
+| Making a decision | `rka_execute(args={"operation":"record_decision", ...})` | `related_journal` (what evidence?), `related_literature` (what papers?) |
+| Creating a mission | `rka_execute(args={"operation":"create_mission", ...})` | `motivated_by_decision` (which decision spawned this?) |
+| Recording a finding | `rka_execute(args={"operation":"record_note", ...})` | `related_decisions`, `related_mission`, `related_literature` (nested under `provenance={…}`) |
+| Finishing a mission | `rka_execute(args={"operation":"submit_report", ...})` | `related_decisions` (which decisions do the results bear on?) |
 
 ---
 
@@ -420,13 +445,13 @@ A complete provenance chain looks like this:
 
 > **Literature** (MQTT benchmarks) → *informed* → **Decision** (test broker limits) → *motivated* → **Mission** (stress test at scale) → *produced* → **Finding** (12% packet loss) → *derived* → **Claim** (threshold at 400) → *justified* → **Decision** (implement sharding)
 
-You can traverse this chain in either direction using `rka_query(operation="provenance", id=<entity_id>, filters={"direction": "backward"})` (upstream, toward what produced the entity) or `filters={"direction": "forward"}` (downstream).
+You can traverse this chain in either direction using `rka_query(args={"operation":"provenance","project_id":"prj_…","id":<entity_id>,"filters":{"direction":"backward"}})` (upstream, toward what produced the entity) or the same call with `"direction":"forward"` (downstream).
 
 > **Why Provenance Matters:** Without provenance links, the knowledge graph is disconnected islands — decisions in one column, literature in another, findings in a third. With provenance, you can ask "why did we decide to use sharding?" and get a chain: because the stress test showed 12% packet loss, which was motivated by the decision to test broker limits, which was informed by the MQTT benchmarks paper.
 
 ### 9.1 — The Maintenance Manifest
 
-The maintenance manifest (`rka_query(operation="pending_maintenance")`) is a pure-SQL tool that detects provenance gaps:
+The maintenance manifest (`rka_query(args={"operation":"pending_maintenance","project_id":"prj_…"})`) is a pure-SQL tool that detects provenance gaps:
 
 - **Decisions without justified_by links** — no evidence trail
 - **Missions without motivated_by_decision** — no triggering decision
@@ -509,7 +534,7 @@ Import papers via BibTeX, DOI, Semantic Scholar, or arXiv search. Always link li
 
 ### Step 4: Record Initial Ideas and Observations
 
-Use `rka_execute(operation="record_note")` for early observations, meeting notes, and hypotheses. Link them to relevant decisions (via `provenance={…}`).
+Use `rka_execute(args={"operation":"record_note", ...})` for early observations, meeting notes, and hypotheses. Link them to relevant decisions through the operation's `provenance` object.
 
 ### Step 5: Start the Mission Cycle
 
@@ -541,9 +566,9 @@ The mission lifecycle is the primary coordination mechanism between Brain and Ex
 
 | Method | Operation | Best For |
 |--------|-----------|----------|
-| Manual | `rka_execute(operation="record_literature")` (title, authors, year, …) | Adding a known paper with metadata |
-| DOI Lookup | `rka_execute(operation="enrich_doi")` (lit_id) | Filling in missing metadata from CrossRef |
-| BibTeX Import | `rka_execute(operation="import_bibtex")` (bibtex) | Bulk import from a .bib file |
+| Manual | `rka_execute(args={"operation":"record_literature", ...})` (title, authors, year, …) | Adding a known paper with metadata |
+| DOI Lookup | `rka_execute(args={"operation":"enrich_doi","lit_id":"lit_…", ...})` | Filling in missing metadata from CrossRef |
+| BibTeX Import | `rka_execute(args={"operation":"import_bibtex","bibtex":"…", ...})` | Bulk import from a .bib file |
 | Semantic Scholar | `rka_search_semantic_scholar` — deferred legacy tool; load via `rka_load_tools(names=[…])` | Searching for relevant papers |
 | arXiv Search | `rka_search_arxiv` — deferred legacy tool; load via `rka_load_tools(names=[…])` | Finding preprints |
 
@@ -882,11 +907,11 @@ locks, or set `RKA_PHASE2_LOCK_PATH` to such a location for every RKA process.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RKA_EMBEDDINGS_ENABLED` | `false` | Enable embedding generation (local, lightweight) |
-| `RKA_EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | FastEmbed model (~130MB ONNX, no GPU needed) |
+| `RKA_EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | FastEmbed model (roughly 520 MB on first uncached download, no GPU needed) |
 
 ### 18.3 — Context Engine
 
-In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL-time: `journal.importance` (CASE: critical=4 → archived=0) × `entity_links` centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries. The legacy `RKA_CONTEXT_HOT_DAYS`, `RKA_CONTEXT_WARM_DAYS`, and `RKA_CONTEXT_DEFAULT_MAX_TOKENS` env vars were removed (see `dec_01KQQPD6Y6B362T3K08368BDMP`). For multi-hop questions, use `rka_query(operation="multi_hop")` instead of `rka_query(operation="context")`.
+In v2.4 the context engine has no tunable settings. Ranking is deterministic SQL-time: `journal.importance` (CASE: critical=4 → archived=0) × `entity_links` centrality × `created_at` DESC, with a +0.5 lift for PI-sourced entries. The legacy `RKA_CONTEXT_HOT_DAYS`, `RKA_CONTEXT_WARM_DAYS`, and `RKA_CONTEXT_DEFAULT_MAX_TOKENS` env vars were removed (see `dec_01KQQPD6Y6B362T3K08368BDMP`). For multi-hop questions, use `rka_query(args={"operation":"multi_hop", ...})` instead of `rka_query(args={"operation":"context", ...})`.
 
 ### 18.4 — General LLM removed; optional LM Studio proposal adapter
 
@@ -941,11 +966,11 @@ or environment settings.
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | MCP tool not visible in Claude | Claude caches the tool list on connect; or the legacy tool is `tier=deferred` | Restart Claude Desktop; or use `rka_load_tools(names=[…])` to register deferred legacy tools |
-| `provenance` operation returns error | Known bug: empty response parsing | Use `rka_query(operation="entity", id=…)` + manual link traversal as workaround |
-| Knowledge graph shows disconnected columns | Missing provenance links between entity types | Brain processes `rka_query(operation="pending_maintenance")` items |
+| `provenance` operation returns error | Known bug: empty response parsing | Use `rka_query(args={"operation":"entity","project_id":"prj_…","id":…})` + manual link traversal as workaround |
+| Knowledge graph shows disconnected columns | Missing provenance links between entity types | Brain processes `rka_query(args={"operation":"pending_maintenance","project_id":"prj_…"})` items |
 | Research map has many "emerging" clusters | Clusters auto-generated by old LLM pipeline with only 1–2 claims | Brain reviews and merges thin clusters over time |
 | Docker container unhealthy | API not responding | Check `docker compose logs -f rka`; rebuild with `--build` |
-| MCP binary out of date | Source changed but `uv tool` not reinstalled | Run: `UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall .` |
+| MCP binary out of date | Source changed but `uv tool` not reinstalled | From the repo, run `uv tool install --force --reinstall .`, then fully restart the MCP client. |
 | A project-scoped MCP call is rejected for missing scope | The call omitted required `project_id` | List projects once, pin the intended id in conversation/workspace metadata, and pass it on every scoped operation |
 | Brain doesn't run maintenance at session start | Claude sometimes skips the session protocol | Say "check maintenance first" to prompt it |
 

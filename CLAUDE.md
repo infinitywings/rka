@@ -78,8 +78,8 @@ Docker container's REST API.
 
 ```bash
 # Install / re-install after code changes:
-UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .   # from repo root
-# Binary lands at: ~/.local/bin/rka
+uv tool install --force --reinstall .   # from repo root, all platforms
+# Binary: ~/.local/bin/rka (macOS/Linux) or %USERPROFILE%\.local\bin\rka.exe (Windows)
 ```
 
 `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -88,13 +88,13 @@ UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .   # from repo root
 ```
 
 After code changes to `rka/mcp/server.py` or other source files:
-1. `UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .` — update the MCP binary
+1. `uv tool install --force --reinstall .` — update the MCP binary
 2. `docker compose up -d --build` — update the API server + worker
 
 ## Common Pitfalls
 
 - `actor="import"` is not a valid actor — use `actor="system"` for programmatic ingestion
-- The MCP server is stateless; it proxies all calls to the REST API at `RKA_API_URL` (default: `http://localhost:9712`)
+- The MCP server is stateless; it proxies all calls to the REST API at `RKA_API_URL` (default: `http://127.0.0.1:9712`)
 - `web/` previously had a nested `.git` — do not re-introduce submodule state there
 - Large files (>10 MB) use fast composite hashing; text files are capped at 200K chars in scan
 - The database lives in the Docker volume `rka-data` at `/data/rka.db` — do not use a local `rka.db`
@@ -127,11 +127,11 @@ On macOS, certain volumes — external drives, SMB/AFP network mounts, OneDrive 
 find . -maxdepth 2 -name '._*' -not -path './.git/*' -delete
 ```
 
-**If `uv tool install --force .` still fails on `._requires.txt`** (the build process re-creates AppleDouble files in `build/` on the fly), install from a `/tmp` clone instead — `/tmp` is on a stock APFS volume that doesn't have the xattr quirk:
+**If `uv tool install --force --reinstall .` still fails on `._requires.txt`** (the build process re-creates AppleDouble files in `build/` on the fly), install from a `/tmp` clone instead — `/tmp` is on a stock APFS volume that doesn't have the xattr quirk:
 
 ```bash
 rm -rf /tmp/rka-build && git clone -q --depth 1 "$PWD" /tmp/rka-build
-cd /tmp/rka-build && UV_CACHE_DIR=/tmp/uv-cache uv tool install --force .
+cd /tmp/rka-build && UV_CACHE_DIR=/tmp/uv-cache uv tool install --force --reinstall .
 ```
 
 **If `docker compose build` succeeds but the new image isn't picked up**, force-recreate:

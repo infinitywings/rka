@@ -2,7 +2,7 @@
 """rka-mcp-bridge.py — cross-platform wrapper invoked by Claude's plugin loader.
 
 Reads integration.json (location is OS-specific), version-checks the recorded
-RKA version against the plugin's compatibility range, and runs the local rka
+``backend_version`` against the plugin's compatibility range, and runs the local rka
 stdio binary with the `mcp` subcommand. Project scope is never injected through
 the environment; every project-scoped operation carries an explicit id.
 
@@ -164,7 +164,7 @@ def main() -> None:
     int_path = integration_path()
 
     binary_path: str | None = None
-    version: str | None = None
+    backend_version: str | None = None
 
     if int_path.is_file():
         try:
@@ -173,8 +173,18 @@ def main() -> None:
             err(f"ERROR: integration.json is malformed JSON at {int_path}: {exc}")
             sys.exit(1)
 
-        # Defensive str() cast in case RKA.app ever writes non-string values.
-        version = str(data.get("version") or "").strip() or None
+        # ``version`` was historically documented as the integration-file
+        # schema version but accidentally treated here as the backend version.
+        # Do not block startup on that ambiguous legacy field. New producers
+        # must write ``schema_version`` and ``backend_version`` explicitly.
+        backend_version = str(data.get("backend_version") or "").strip() or None
+        legacy_version = str(data.get("version") or "").strip() or None
+        if legacy_version and backend_version is None:
+            err(
+                "NOTICE: integration.json uses the ambiguous legacy `version` field; "
+                "it is not used for compatibility checks. Migrate to "
+                "`schema_version` and `backend_version`."
+            )
         binary_path = str(data.get("binary_path") or "").strip() or None
         if data.get("default_project_id"):
             err(
@@ -188,7 +198,7 @@ def main() -> None:
             binary_path = str((int_path.parent / binary_path).resolve())
     else:
         err(f"NOTICE: integration.json not found at {int_path} — falling back to PATH lookup for `rka`.")
-        err("If RKA.app is supposed to be running, this means it isn't (or hasn't written its config yet).")
+        err("If a launcher/native app is expected to manage this file, it has not written it yet.")
 
     # Resolve binary path: integration.json wins, else PATH lookup.
     if not binary_path:
@@ -196,7 +206,7 @@ def main() -> None:
         if not binary_path:
             err("ERROR: rka binary not found. Either:")
             err("  1. Install via `uv tool install --force --reinstall .` from the rka repo (lands at ~/.local/bin/rka).")
-            err("  2. Start RKA.app so it writes integration.json with binary_path.")
+            err("  2. Start the launcher/native app that writes integration.json with binary_path.")
             err("  3. Set RKA_INTEGRATION_FILE env var to the integration.json location.")
             sys.exit(1)
 
@@ -205,21 +215,27 @@ def main() -> None:
         err("Check integration.json's binary_path field, or rerun `uv tool install --force --reinstall .` from the rka repo.")
         sys.exit(1)
 
-    # Version check (only if integration.json supplied a version; PATH-fallback
-    # mode skips the check since we have no version metadata to verify against).
-    if version is not None:
-        parsed = parse_version(version)
+    # Version check (only if integration.json supplied ``backend_version``;
+    # PATH-fallback mode skips it because no backend metadata is available).
+    if backend_version is not None:
+        parsed = parse_version(backend_version)
         minimum = ".".join(str(n) for n in MINIMUM_BACKEND_VERSION)
         if parsed is None:
             # Unreadable version string: warn, but do not block. The binary
             # itself will fail loudly if it really is incompatible.
-            err(f"NOTICE: could not parse RKA version '{version}'; skipping the compatibility check.")
+            err(
+                f"NOTICE: could not parse RKA backend_version '{backend_version}'; "
+                "skipping the compatibility check."
+            )
         elif parsed < MINIMUM_BACKEND_VERSION:
-            err(f"ERROR: RKA version '{version}' is older than this plugin supports (requires {minimum} or newer).")
+            err(
+                f"ERROR: RKA backend_version '{backend_version}' is older than this "
+                f"plugin supports (requires {minimum} or newer)."
+            )
             err("Upgrade RKA, or install a plugin version matching your backend.")
             err(
                 "If RKA is in fact newer than this and you are seeing a stale number, "
-                f"integration.json is reporting it: {integration_path()}"
+                f"integration.json backend_version is reporting it: {integration_path()}"
             )
             sys.exit(1)
 
