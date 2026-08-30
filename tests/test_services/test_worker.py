@@ -166,3 +166,85 @@ class TestWorkerStartupFallsBackToEnvWhenConfigAbsent:
             env_fallback_model="any",
         )
         assert result is None
+
+    def test_corrupt_persisted_config_fails_closed(self, tmp_path: Path) -> None:
+        from rka.services.embedding_config import EmbeddingConfigError
+
+        EnrichmentWorker = _import_worker()
+        (tmp_path / "embedding_config.json").write_text("not-json {{{")
+
+        with (
+            patch("rka.infra.embeddings.EmbeddingService") as fallback,
+            pytest.raises(EmbeddingConfigError),
+        ):
+            EnrichmentWorker._resolve_embeddings(
+                db=MagicMock(),
+                data_dir=tmp_path,
+                embeddings_enabled=True,
+                env_fallback_model="must-not-be-used",
+            )
+
+        fallback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_refreshes_when_generation_changes(db, tmp_path: Path) -> None:
+    from rka.services.embedding_config import EmbeddingConfig, EmbeddingConfigService
+    from rka.services.embedding_index import (
+        embedding_space_signature,
+        reconcile_embedding_index,
+    )
+
+    EnrichmentWorker = _import_worker()
+    cfg_svc = EmbeddingConfigService(config_dir=tmp_path)
+
+    def config(model: str) -> EmbeddingConfig:
+        return EmbeddingConfig(
+            backend="fastembed",
+            config={"model_name": model, "dim": 768},
+        )
+
+    saved_a = cfg_svc.save_config(config("model-a"), actor="test")
+    state_a = await reconcile_embedding_index(
+        db,
+        space_signature=embedding_space_signature(saved_a),
+        model_name="model-a",
+        dim=768,
+    )
+    fake_a = MagicMock(model_name="model-a", dim=768)
+    fake_b = MagicMock(model_name="model-b", dim=768)
+
+    def build(payload, db=None):  # noqa: ARG001
+        return fake_a if payload["config"]["model_name"] == "model-a" else fake_b
+
+    worker = EnrichmentWorker(
+        db=db,
+        embeddings=None,
+        data_dir=tmp_path,
+        embeddings_enabled=True,
+    )
+    with patch(
+        "rka.infra.embeddings.EmbeddingService.from_config",
+        side_effect=build,
+    ):
+        await worker._refresh_embeddings_before_job()
+        assert worker.embeddings is fake_a
+        fake_a.bind_index_generation.assert_called_once_with(
+            state_a.state.generation,
+            space_signature=state_a.state.space_signature,
+        )
+
+        saved_b = cfg_svc.save_config(config("model-b"), actor="test")
+        state_b = await reconcile_embedding_index(
+            db,
+            space_signature=embedding_space_signature(saved_b),
+            model_name="model-b",
+            dim=768,
+        )
+        await worker._refresh_embeddings_before_job()
+
+    assert worker.embeddings is fake_b
+    fake_b.bind_index_generation.assert_called_once_with(
+        state_b.state.generation,
+        space_signature=state_b.state.space_signature,
+    )

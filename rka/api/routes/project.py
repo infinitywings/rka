@@ -129,13 +129,34 @@ async def get_capabilities(
     db = getattr(state, "db", None)
 
     embeddings = getattr(state, "embeddings", None)
-    embeddings_available = bool(embeddings) and bool(getattr(db, "vec_available", False))
-    if embeddings_available:
-        emb_block = {"available": True, "reason_unavailable": None}
+    if embeddings and getattr(db, "vec_available", False):
+        if getattr(embeddings, "runtime_available", None) is False:
+            emb_block = {
+                "available": False,
+                "reason_unavailable": (
+                    "configured embedding backend temporarily unavailable; "
+                    "search is using lexical retrieval"
+                ),
+            }
+        elif (
+            getattr(embeddings, "index_search_ready", None) is not None
+            and not await embeddings.index_search_ready()
+        ):
+            emb_block = {
+                "available": False,
+                "reason_unavailable": (
+                    "embedding index is rebuilding or requires repair; "
+                    "search is using lexical retrieval"
+                ),
+            }
+        else:
+            emb_block = {"available": True, "reason_unavailable": None}
     elif not embeddings:
+        reason = getattr(state, "embedding_unavailable_reason", None)
         emb_block = {
             "available": False,
-            "reason_unavailable": "embeddings disabled (RKA_EMBEDDINGS_ENABLED=false)",
+            "reason_unavailable": reason
+            or "embeddings disabled (RKA_EMBEDDINGS_ENABLED=false)",
         }
     else:
         emb_block = {

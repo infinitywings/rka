@@ -140,9 +140,21 @@ class EmbeddingConfigService:
         # current file, this is a no-op (first-ever save).
         if self.config_path.exists():
             try:
-                shutil.copy2(self.config_path, self.backup_path)
-                # The backup gets the same restrictive mode as the live file.
-                os.chmod(self.backup_path, 0o600)
+                current = EmbeddingConfig.model_validate_json(
+                    self.config_path.read_text()
+                )
+                if current:
+                    shutil.copy2(self.config_path, self.backup_path)
+                    # The backup gets the same restrictive mode as the live file.
+                    os.chmod(self.backup_path, 0o600)
+            except ValueError as exc:
+                # A repair must not overwrite a known-good backup with corrupt
+                # live bytes. The validated replacement is still written
+                # atomically below.
+                logger.warning(
+                    "embedding config is invalid; preserving existing backup: %s",
+                    exc,
+                )
             except OSError as exc:
                 raise EmbeddingConfigError(
                     f"failed to write pre-flight backup to {self.backup_path}: {exc!s}",

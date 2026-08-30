@@ -33,11 +33,9 @@ shape.
 - **FastEmbed** — first run, no external services, fully offline. 768-dim
   vectors are fast and accurate for general English text. Best for "I
   want it to work without doing anything."
-- **OpenAI-compat → LM Studio (qwen3-8b)** — when you've already loaded
-  a high-quality embedding model in LM Studio. 4096-dim vectors with
-  the eval-harness-measured +9 % NDCG@10 improvement on
-  semantic-hybrid search. Best for "I want better retrieval quality and
-  I'm already running LM Studio."
+- **OpenAI-compat → a managed local sidecar or LM Studio** — when a local
+  service exposes `/v1/embeddings`. Models that distinguish query and
+  document inputs can use the optional templates described below.
 - **Ollama** — when Ollama is your local model server of choice. Pull
   any embedding model with `ollama pull nomic-embed-text`, then point
   the UI at `http://host.docker.internal:11434`.
@@ -57,7 +55,9 @@ shape.
     "base_url": "http://host.docker.internal:1234",
     "model": "text-embedding-qwen3-embedding-8b",
     "api_key": "sk-...",
-    "dim": 4096
+    "dim": 4096,
+    "query_template": "{text}",
+    "document_template": "{text}"
   },
   "updated_at": "2026-05-15T16:00:00Z",
   "updated_by": "pi"
@@ -65,10 +65,18 @@ shape.
 ```
 
 The `backend` field is one of `"fastembed" | "openai_compat" | "ollama"`.
-The `config` subobject's required keys vary by backend (see matrix
-above). Schema validation is strict (`extra="forbid"` on the Pydantic
-model) — typos in keys surface as a 422 immediately, rather than being
-silently dropped.
+The outer object rejects unknown fields. The backend-specific `config`
+subobject is intentionally extensible; recognized fields are validated when
+the backend is constructed, while consumers should not assume that every
+unknown nested key is rejected.
+
+For a pinned local runtime, `embedding_space_id` may carry the immutable
+artifact/runtime identity used for embedding metadata. It must change when
+model bytes, quantization, pooling, normalization, dimensions, or document
+encoding change. `query_template` and `document_template` each contain exactly
+one literal `{text}` placeholder. Query-only instruction changes do not require
+document re-indexing; changes to the document template or embedding space do.
+See [ADR 0017](adr/0017-portable-embedding-runtime-boundary.md).
 
 ## Switching backends
 
@@ -79,29 +87,30 @@ silently dropped.
 4. Click **Test connection**. The result panel shows `ok`, detected
    `dim`, and `latency_ms`. A failed test is non-destructive; the
    previous config stays active.
-5. Click **Save & re-embed**. A confirmation modal estimates the
-   re-embed wall-clock (~7–14 min for the current 827-claim corpus on
-   qwen3-8b) and warns that existing vectors will be discarded.
+5. Click **Save & re-embed**. A confirmation modal explains whether the
+   change requires missing-row repair, a same-dimension rebuild, or supervised
+   offline maintenance.
 6. Confirm → backfill starts in the background; a progress bar in the
    Settings page polls every ~1.5 s until the job reaches `complete`
-   or `failed`. FTS continues working during the re-embed; semantic
-   search returns empty results for in-flight claims.
+   or `failed`. During a generation rebuild, vector retrieval is withheld and
+   the whole search path remains lexical until coverage and consistency checks
+   mark the new generation ready.
 
 ## Cost of switching
 
-Re-embedding triggers automatically when `(backend, model, dim)` change.
-Changing `api_key` alone does not trigger a re-embed; PUT returns 200
-with the updated (redacted) config.
+Re-embedding triggers automatically when the stored embedding-space identity,
+document template, dimensions, backend, or endpoint model changes. A changed
+embedding space forces a clean rebuild even at the same dimension. Repointing
+an endpoint backfills missing rows without discarding compatible vectors.
+Changing credentials does not invalidate compatible vectors, but it may
+schedule a missing-only repair and return 202 so records created during an
+authentication outage are not stranded. Existing compatible rows are kept.
+This repair does not rescan same-model metadata for changed content; failed
+edit jobs remain visible in the durable job queue and must be retried.
 
-| Backend        | Empirical latency per claim | 827-claim re-embed wall-clock |
-|----------------|-----------------------------|-------------------------------|
-| FastEmbed nomic-768 | ~50–100 ms                | ~1–2 min                      |
-| LM Studio qwen3-8b  | ~0.5–1 s                  | ~7–14 min                     |
-| Ollama nomic-embed-text | ~100–200 ms             | ~2–3 min                      |
-| OpenAI text-embedding-3-small | ~30–60 ms (network-bound) | ~1 min                |
-
-Numbers are reference points from internal testing — your hardware,
-local model server, and network will vary.
+A populated index cannot change vector dimension online. Core returns
+`409 embedding_offline_reindex_required`; a supervisor must stop API and
+worker peers, perform the resize/full re-index, and restart them.
 
 ## Troubleshooting
 
@@ -153,10 +162,9 @@ sane.
 
 Q&A and summary generation that used to live in the web UI were removed
 in v2.4.0 per the LLM-capability-removal directive
-(`jrn_01KRNZBS50K250HHHHEC58E4GC`). Server-side LLM code is preserved
-(`rka/infra/llm.py`, `rka/api/routes/llm.py`, the `rka_ask` /
-`rka_generate_summary` MCP tools) and will be re-wired through the
-orchestrator's Claude Code SDK in a follow-up release.
+(`jrn_01KRNZBS50K250HHHHEC58E4GC`). Server-side legacy LLM code remains
+outside the embedding and Core retrieval contract. Any future generation
+product requires its own explicit boundary decision.
 
 `/api/capabilities` no longer returns the `llm` field (BREAKING change
 at v2.4.0). Consumers of the `embedding` half of the response are

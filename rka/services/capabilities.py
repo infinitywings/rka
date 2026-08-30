@@ -83,6 +83,7 @@ def build_core_capabilities(
     embedding = EmbeddingCapability(
         available=embedding_available,
         reason_unavailable=embedding_reason,
+        search_mode="hybrid" if embedding_available else "lexical",
     )
     available = ["rest", "mcp"]
     if embedding.available:

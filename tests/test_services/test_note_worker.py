@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 import pytest
@@ -235,6 +236,214 @@ class TestNoteQueue:
         # Note should show failed enrichment status
         refreshed = await svc_no_llm.get(note.id)
         assert refreshed.enrichment_status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_generation_change_rejects_inflight_worker_write(
+        self, db: Database
+    ):
+        from rka.services.embedding_index import (
+            embedding_space_signature,
+            reconcile_embedding_index,
+        )
+
+        class BlockingBackend:
+            model_name = "model-a"
+            dim = 768
+
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def embed(self, _text: str, *, is_query: bool = False):
+                self.started.set()
+                await self.release.wait()
+                return [0.0] * self.dim
+
+            async def embed_batch(self, texts, *, is_query: bool = False):
+                return [await self.embed(text, is_query=is_query) for text in texts]
+
+        await _ensure_project(db, "proj_generation", "Generation")
+        cfg_a = {
+            "backend": "openai_compat",
+            "config": {"model": "model-a", "dim": 768},
+        }
+        initial = await reconcile_embedding_index(
+            db,
+            space_signature=embedding_space_signature(cfg_a),
+            model_name="model-a",
+            dim=768,
+        )
+        backend = BlockingBackend()
+        embeddings = EmbeddingService(db=db, backend=backend)
+        embeddings.space_signature = initial.state.space_signature
+        embeddings.bind_index_generation(initial.state.generation)
+        note_svc = NoteService(
+            db,
+            embeddings=embeddings,
+            project_id="proj_generation",
+        )
+        note = await note_svc.create(
+            JournalEntryCreate(content="generation fence", source="executor")
+        )
+        await db.execute(
+            "UPDATE jobs SET max_attempts = 1 WHERE entity_id = ?",
+            [note.id],
+        )
+        worker = EnrichmentWorker(
+            db=db,
+            embeddings=embeddings,
+            max_attempts=1,
+        )
+
+        task = asyncio.create_task(worker.run_once())
+        await asyncio.wait_for(backend.started.wait(), timeout=2)
+        cfg_b = {
+            "backend": "openai_compat",
+            "config": {"model": "model-b", "dim": 768},
+        }
+        await reconcile_embedding_index(
+            db,
+            space_signature=embedding_space_signature(cfg_b),
+            model_name="model-b",
+            dim=768,
+        )
+        backend.release.set()
+        assert await task is True
+
+        job = await db.fetchone(
+            "SELECT status, last_error FROM jobs WHERE entity_id = ?",
+            [note.id],
+        )
+        assert job is not None
+        assert job["status"] == "failed"
+        assert "generation changed" in job["last_error"]
+        assert await db.fetchone(
+            "SELECT id FROM vec_journal WHERE id = ?", [note.id]
+        ) is None
+        assert await db.fetchone(
+            """SELECT entity_id FROM embedding_metadata
+               WHERE entity_type = 'journal' AND entity_id = ?""",
+            [note.id],
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_generation_change_reloads_config_and_repairs_inflight_note(
+        self, db: Database, tmp_path
+    ):
+        from unittest.mock import patch
+
+        from rka.services.embedding_config import EmbeddingConfig, EmbeddingConfigService
+        from rka.services.embedding_index import (
+            embedding_space_signature,
+            reconcile_embedding_index,
+        )
+
+        class BlockingBackend:
+            model_name = "model-a"
+            dim = 768
+
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def embed(self, _text: str, *, is_query: bool = False):
+                self.started.set()
+                await self.release.wait()
+                return [0.0] * self.dim
+
+            async def embed_batch(self, texts, *, is_query: bool = False):
+                return [await self.embed(text, is_query=is_query) for text in texts]
+
+        class ReadyBackend:
+            model_name = "model-b"
+            dim = 768
+
+            async def embed(self, _text: str, *, is_query: bool = False):
+                return [1.0] * self.dim
+
+            async def embed_batch(self, texts, *, is_query: bool = False):
+                return [[1.0] * self.dim for _text in texts]
+
+        def config(model: str) -> EmbeddingConfig:
+            return EmbeddingConfig(
+                backend="openai_compat",
+                config={
+                    "base_url": "http://127.0.0.1:1",
+                    "model": model,
+                    "dim": 768,
+                },
+            )
+
+        await _ensure_project(db, "proj_generation_retry", "Generation Retry")
+        cfg_svc = EmbeddingConfigService(config_dir=tmp_path)
+        saved_a = cfg_svc.save_config(config("model-a"), actor="test")
+        state_a = await reconcile_embedding_index(
+            db,
+            space_signature=embedding_space_signature(saved_a),
+            model_name="model-a",
+            dim=768,
+        )
+        blocking = BlockingBackend()
+        service_a = EmbeddingService(db=db, backend=blocking)
+        service_a.space_signature = state_a.state.space_signature
+        service_a.bind_index_generation(state_a.state.generation)
+        service_b = EmbeddingService(db=db, backend=ReadyBackend())
+
+        note_svc = NoteService(
+            db,
+            embeddings=service_a,
+            project_id="proj_generation_retry",
+        )
+        note = await note_svc.create(
+            JournalEntryCreate(content="repair this generation race", source="executor")
+        )
+        await db.execute(
+            "UPDATE jobs SET max_attempts = 1 WHERE entity_id = ?",
+            [note.id],
+        )
+
+        def build(payload, db=None):  # noqa: ARG001
+            model = payload["config"].get("model")
+            return service_a if model == "model-a" else service_b
+
+        worker = EnrichmentWorker(
+            db=db,
+            embeddings=service_a,
+            data_dir=tmp_path,
+            max_attempts=1,
+        )
+        with patch(
+            "rka.infra.embeddings.EmbeddingService.from_config",
+            side_effect=build,
+        ):
+            task = asyncio.create_task(worker.run_once())
+            await asyncio.wait_for(blocking.started.wait(), timeout=2)
+            saved_b = cfg_svc.save_config(config("model-b"), actor="test")
+            state_b = await reconcile_embedding_index(
+                db,
+                space_signature=embedding_space_signature(saved_b),
+                model_name="model-b",
+                dim=768,
+            )
+            blocking.release.set()
+            assert await task is True
+
+        job = await db.fetchone(
+            "SELECT status, attempts, last_error FROM jobs WHERE entity_id = ?",
+            [note.id],
+        )
+        metadata = await db.fetchone(
+            """SELECT model_name, dimensions FROM embedding_metadata
+               WHERE project_id = ? AND entity_type = 'journal' AND entity_id = ?""",
+            ["proj_generation_retry", note.id],
+        )
+        assert job == {"status": "completed", "attempts": 1, "last_error": None}
+        assert worker.embeddings is service_b
+        assert service_b.index_generation == state_b.state.generation
+        assert metadata == {"model_name": "model-b", "dimensions": 768}
+        assert await db.fetchone(
+            "SELECT id FROM vec_journal WHERE id = ?", [note.id]
+        ) == {"id": note.id}
 
     @pytest.mark.asyncio
     async def test_create_note_without_llm_no_jobs(self, db: Database):

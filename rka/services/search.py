@@ -141,6 +141,14 @@ class SearchService:
     def with_project(self, project_id: str) -> "SearchService":
         return SearchService(db=self.db, embeddings=self.embeddings, project_id=project_id)
 
+    async def _embedding_index_ready(self) -> bool:
+        if self.embeddings is None:
+            return False
+        check = getattr(self.embeddings, "index_search_ready", None)
+        if check is None:
+            return True
+        return bool(await check())
+
     # Query-understanding patterns (eval-v3 theme E follow-up; Eval-v1
     # Finding: temporal language and actor anchors fell back to literal FTS
     # tokens and missed — "today" matched nothing, "PI directives" ignored
@@ -414,8 +422,19 @@ class SearchService:
         vec_results: list[SearchHit] = []
         if self.embeddings and self.db.vec_available:
             try:
-                query_vec = await self.embeddings.embed(query)
-                vec_results = await self._vector_search(query_vec, types, limit * 2)
+                if await self._embedding_index_ready():
+                    query_vec = await self.embeddings.embed(query)
+                    # Hold one read snapshot from the final generation check
+                    # through KNN. A concurrent transition either waits or is
+                    # observed here, so query and document vectors always come
+                    # from the same generation.
+                    async with self.db.transaction(write=False):
+                        if await self._embedding_index_ready():
+                            vec_results = await self._vector_search(
+                                query_vec,
+                                types,
+                                limit * 2,
+                            )
             except Exception as exc:
                 logger.warning("Vector search failed, using keyword only: %s", exc)
 

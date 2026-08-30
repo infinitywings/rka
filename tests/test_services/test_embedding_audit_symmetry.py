@@ -123,7 +123,7 @@ async def test_audit_symmetry_backfill_clears_pending_flag(db):
     await db.commit()
 
     svc = BackfillService(db=db, embeddings=_FakeEmb(dim=4), batch_size=2)
-    result = await svc.run_backfill(status)
+    result = await svc.run_backfill(status, entity_types=("claim",))
     assert result.state == "complete"
 
     # Read-side: every processed claim now has embedding_pending=0.

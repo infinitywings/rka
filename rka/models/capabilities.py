@@ -12,6 +12,7 @@ class EmbeddingCapability(BaseModel):
 
     available: bool
     reason_unavailable: str | None = None
+    search_mode: Literal["hybrid", "lexical"] = "lexical"
 
 
 class CoreContractIdentity(BaseModel):

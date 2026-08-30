@@ -396,7 +396,7 @@ function EmbeddingsConfigCard() {
         toast.success(`Re-embed started (job ${jobId})`)
         setActiveJobId(jobId)
       } else {
-        toast.success("Config saved (no re-embed needed — only api_key changed)")
+        toast.success("Config saved (document index unchanged)")
       }
       setConfirmOpen(false)
     },
@@ -450,24 +450,38 @@ function EmbeddingsConfigCard() {
   }, [backfill?.state])
 
   const buildPayload = (): EmbeddingConfigT => {
+    const preserved = config?.backend === backend ? { ...config.config } : {}
+    // The GET response contains only the redaction marker, never the saved
+    // secret. Omission means "preserve" on PUT; a newly typed value replaces it.
+    delete preserved.api_key
     if (backend === "fastembed") {
       return {
         backend: "fastembed",
-        config: { model_name: modelName, dim: Number(dim) || 768 },
+        config: {
+          ...preserved,
+          model_name: modelName,
+          dim: Number(dim) || 768,
+        },
       }
     }
     if (backend === "ollama") {
       return {
         backend: "ollama",
-        config: { base_url: baseUrl, model, dim: Number(dim) || 0 },
+        config: {
+          ...preserved,
+          base_url: baseUrl,
+          model,
+          dim: Number(dim) || 0,
+        },
       }
     }
     return {
       backend: "openai_compat",
       config: {
+        ...preserved,
         base_url: baseUrl,
         model,
-        api_key: apiKey || undefined,
+        ...(apiKey ? { api_key: apiKey } : {}),
         dim: Number(dim) || 0,
       },
     }
@@ -691,7 +705,7 @@ function EmbeddingsConfigCard() {
         {activeJobId && backfill && (
           <div className="rounded-md border p-3 space-y-2">
             <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold">Re-embedding claims</span>
+              <span className="font-semibold">Re-embedding research records</span>
               <Badge variant="outline">{backfill.state}</Badge>
             </div>
             <div className="w-full bg-muted rounded h-2 overflow-hidden">
@@ -706,7 +720,7 @@ function EmbeddingsConfigCard() {
               />
             </div>
             <p className="text-[11px] text-muted-foreground">
-              {backfill.processed ?? 0} / {backfill.total ?? 0} claims •{" "}
+              {backfill.processed ?? 0} / {backfill.total ?? 0} records •{" "}
               {Math.round(backfill.elapsed_seconds ?? 0)}s elapsed
             </p>
             {backfill.state === "failed" && backfill.error && (
@@ -719,13 +733,13 @@ function EmbeddingsConfigCard() {
         <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Re-embed all claims?</DialogTitle>
+              <DialogTitle>Save embedding configuration?</DialogTitle>
               <DialogDescription>
-                Saving this config will drop existing embeddings and re-embed
-                every claim under the new backend. With qwen3-8b on LM Studio
-                this takes ~7–14 minutes for 827 claims. FTS continues to work
-                during the re-embed; semantic search is degraded until it
-                completes.
+                RKA will test the configuration before saving it. A compatible
+                change repairs only missing records; a same-dimension embedding
+                space change rebuilds derived vectors while retrieval stays
+                lexical. A populated cross-dimension change is rejected until
+                supervised offline maintenance is available.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
@@ -738,7 +752,7 @@ function EmbeddingsConfigCard() {
                 className="gap-2"
               >
                 {saveMutation.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
-                Re-embed claims
+                Save configuration
               </Button>
             </DialogFooter>
           </DialogContent>

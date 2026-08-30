@@ -3,7 +3,7 @@
 Each backend is exercised against a mocked `httpx` transport (for the
 HTTP backends) so the suite runs offline. The FastEmbed backend is
 covered by a Protocol-conformance test that doesn't touch the model
-loader (we don't pull ~130 MB at test time).
+loader (we don't download model weights at test time).
 """
 
 from __future__ import annotations
@@ -152,12 +152,147 @@ async def test_openai_compat_embed_batch_preserves_order():
 
 
 @pytest.mark.asyncio
+async def test_openai_compat_orders_batch_by_response_index():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"embedding": [2.0, 2.0], "index": 1},
+                    {"embedding": [1.0, 1.0], "index": 0},
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x"
+    )
+    backend = OpenAICompatBackend(
+        base_url="http://x", model="m", dim=2, http_client=client
+    )
+
+    assert await backend.embed_batch(["first", "second"]) == [
+        [1.0, 1.0],
+        [2.0, 2.0],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_rejects_duplicate_or_missing_batch_indices():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"embedding": [1.0, 1.0], "index": 0},
+                    {"embedding": [2.0, 2.0], "index": 0},
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x"
+    )
+    backend = OpenAICompatBackend(
+        base_url="http://x", model="m", dim=2, http_client=client
+    )
+
+    with pytest.raises(ValueError, match="invalid embedding index"):
+        await backend.embed_batch(["first", "second"])
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_applies_query_and_document_templates():
+    captured: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured.append(body["input"])
+        return httpx.Response(
+            200,
+            json={"data": [{"embedding": [0.1] * 3, "index": 0}]},
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x"
+    )
+    b = OpenAICompatBackend(
+        base_url="http://x",
+        model="transport-alias",
+        dim=3,
+        query_template="Instruct: retrieve research context.\nQuery: {text}",
+        document_template="{text}",
+        embedding_space_id="qwen-space-v1",
+        http_client=client,
+    )
+
+    await b.embed("why map nine types to three?", is_query=True)
+    await b.embed("decision record", is_query=False)
+
+    assert captured == [
+        [
+            "Instruct: retrieve research context.\n"
+            "Query: why map nine types to three?"
+        ],
+        ["decision record"],
+    ]
+    # Provenance uses the vector-space identity; HTTP requests still use the
+    # transport alias (asserted separately by the request-capture tests).
+    assert b.model_name == "qwen-space-v1"
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_templates_apply_to_batches():
+    captured: dict[str, list[str]] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured["inputs"] = body["input"]
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"embedding": [float(i)] * 2, "index": i}
+                    for i in range(len(body["input"]))
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://x"
+    )
+    b = OpenAICompatBackend(
+        base_url="http://x",
+        model="m",
+        dim=2,
+        query_template="Query: {text}",
+        http_client=client,
+    )
+    await b.embed_batch(["alpha", "beta"], is_query=True)
+    assert captured["inputs"] == ["Query: alpha", "Query: beta"]
+
+
+def test_openai_compat_rejects_invalid_templates():
+    with pytest.raises(ValueError, match="exactly one"):
+        OpenAICompatBackend(
+            base_url="http://x", model="m", query_template="missing placeholder"
+        )
+    with pytest.raises(ValueError, match="exactly one"):
+        OpenAICompatBackend(
+            base_url="http://x", model="m", document_template="{text} {text}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_openai_compat_sends_authorization_header_when_api_key_present():
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["auth"] = request.headers.get("Authorization")
-        return httpx.Response(200, json={"data": [{"embedding": [0.1] * 3}]})
+        return httpx.Response(
+            200,
+            json={"data": [{"embedding": [0.1] * 3, "index": 0}]},
+        )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
     b = OpenAICompatBackend(
@@ -174,7 +309,10 @@ async def test_openai_compat_omits_authorization_when_api_key_absent():
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["auth"] = request.headers.get("Authorization")
-        return httpx.Response(200, json={"data": [{"embedding": [0.1] * 3}]})
+        return httpx.Response(
+            200,
+            json={"data": [{"embedding": [0.1] * 3, "index": 0}]},
+        )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
     b = OpenAICompatBackend(
@@ -343,7 +481,7 @@ def test_fastembed_backend_skips_prefix_for_non_nomic_model():
 # Pre-v2.7.0.1, FastEmbedBackend constructed TextEmbedding(model_name=...) with
 # no threads or cache_dir, leaving onnxruntime to default intra_op_num_threads
 # to container CPU count (10 on Apple Silicon under Docker) and writing the
-# 130 MB model to an ephemeral cache that didn't survive container recreate.
+# model to an ephemeral cache that didn't survive container recreate.
 # Empirical signature (2026-06-03): peak worker memory rose 7.17 → 7.87 GiB
 # when the VM ceiling went 7.75 → 9.21 GiB — unbounded growth, not undersized
 # VM. The fix caps threads at 2 (configurable) and persists cache to /data.
@@ -535,8 +673,6 @@ async def test_fastembed_embed_raises_on_dim_drift_after_construction():
     b = FastEmbedBackend(model_name="custom-model", dim=4)
     # Bypass the real model loader; inject a fake that returns 768-dim vectors.
     b._model = _FakeModel(dim=768)
-
-    import asyncio
 
     with pytest.raises(EmbeddingConfigError, match="dim mismatch"):
         await b.embed("hi")

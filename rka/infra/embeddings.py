@@ -46,6 +46,9 @@ class EmbeddingService:
         backend: EmbeddingBackend | None = None,
     ) -> None:
         self.db = db
+        self.index_generation: int | None = None
+        self.runtime_available: bool | None = None
+        self.runtime_error_code: str | None = None
         if backend is not None:
             self._backend: EmbeddingBackend = backend
             self.model_name = backend.model_name
@@ -54,6 +57,15 @@ class EmbeddingService:
                 {"backend": "fastembed", "config": {"model_name": model_name}}
             )
             self.model_name = model_name
+        from rka.services.embedding_index import embedding_space_signature
+
+        self.space_signature = embedding_space_signature(
+            {
+                "backend": "fastembed",
+                "config": {"model_name": self.model_name, "dim": self._backend.dim},
+            },
+            dimensions=self._backend.dim,
+        )
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -65,7 +77,26 @@ class EmbeddingService:
     ) -> "EmbeddingService":
         """Build a service from a `/data/embedding_config.json`-shaped dict."""
         backend = make_backend(config)
-        return cls(model_name=backend.model_name, db=db, backend=backend)
+        service = cls(model_name=backend.model_name, db=db, backend=backend)
+        from rka.services.embedding_index import embedding_space_signature
+
+        service.space_signature = embedding_space_signature(
+            config,
+            dimensions=backend.dim,
+        )
+        return service
+
+    def bind_index_generation(
+        self,
+        generation: int,
+        *,
+        space_signature: str | None = None,
+    ) -> None:
+        """Bind this process-local backend to a durable index generation."""
+
+        self.index_generation = int(generation)
+        if space_signature is not None:
+            self.space_signature = space_signature
 
     # ------------------------------------------------------------------
     # Public surface — preserved from the pre-T1 EmbeddingService
@@ -81,17 +112,69 @@ class EmbeddingService:
 
     async def embed(self, text: str) -> list[float]:
         """Embed a query string."""
-        return await self._backend.embed(text, is_query=True)
+        try:
+            result = await self._backend.embed(text, is_query=True)
+        except Exception:
+            self.runtime_available = False
+            self.runtime_error_code = "embedding_backend_unavailable"
+            raise
+        self.runtime_available = True
+        self.runtime_error_code = None
+        return result
 
     async def embed_document(self, text: str) -> list[float]:
         """Embed a document for storage."""
-        return await self._backend.embed(text, is_query=False)
+        try:
+            result = await self._backend.embed(text, is_query=False)
+        except Exception:
+            self.runtime_available = False
+            self.runtime_error_code = "embedding_backend_unavailable"
+            raise
+        self.runtime_available = True
+        self.runtime_error_code = None
+        return result
 
     async def embed_batch(
         self, texts: list[str], is_query: bool = False
     ) -> list[list[float]]:
         """Batch embed multiple texts."""
-        return await self._backend.embed_batch(texts, is_query=is_query)
+        try:
+            result = await self._backend.embed_batch(texts, is_query=is_query)
+        except Exception:
+            self.runtime_available = False
+            self.runtime_error_code = "embedding_backend_unavailable"
+            raise
+        self.runtime_available = True
+        self.runtime_error_code = None
+        return result
+
+    async def assert_current_generation(self) -> None:
+        """Reject writes produced by an outdated API or worker process."""
+
+        if self.db is None:
+            return
+        from rka.services.embedding_index import assert_embedding_generation
+
+        await assert_embedding_generation(
+            self.db,
+            generation=self.index_generation,
+            space_signature=self.space_signature,
+            dim=self._backend.dim,
+        )
+
+    async def index_search_ready(self) -> bool:
+        """Return whether this backend may query the durable vector index."""
+
+        if self.db is None:
+            return True
+        from rka.services.embedding_index import embedding_index_search_ready
+
+        return await embedding_index_search_ready(
+            self.db,
+            generation=self.index_generation,
+            space_signature=self.space_signature,
+            dim=self._backend.dim,
+        )
 
     @staticmethod
     def content_hash(content: str | bytes) -> str:
@@ -190,6 +273,7 @@ class EmbeddingService:
             # metadata row, so a failed INSERT cannot leave the entity with no
             # vector at all — which would be worse than a stale one.
             async with self.db.transaction():
+                await self.assert_current_generation()
                 await self.db.execute(
                     f"DELETE FROM {table} WHERE id = ?",
                     [entity_id],

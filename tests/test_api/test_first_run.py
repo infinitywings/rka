@@ -130,6 +130,39 @@ async def test_second_boot_does_not_overwrite_user_config(tmp_path: Path):
         await lifespan.__aexit__(None, None, None)
 
 
+@pytest.mark.asyncio
+async def test_corrupt_config_starts_lexical_without_overwriting_bytes(tmp_path: Path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cfg_path = data_dir / "embedding_config.json"
+    corrupt = b"not-json {{{"
+    cfg_path.write_bytes(corrupt)
+    config = RKAConfig(
+        project_dir=tmp_path,
+        db_path=Path("corrupt_start.db"),
+        data_dir=data_dir,
+        embeddings_enabled=True,
+        llm_enabled=False,
+    )
+    app = create_app(config)
+    lifespan = app.router.lifespan_context(app)
+    await lifespan.__aenter__()
+    try:
+        assert app.state.embeddings is None
+        assert cfg_path.read_bytes() == corrupt
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            capability = (await client.get("/api/capabilities")).json()["embedding"]
+        assert capability["available"] is False
+        assert capability["search_mode"] == "lexical"
+        assert "unreadable" in capability["reason_unavailable"]
+    finally:
+        await lifespan.__aexit__(None, None, None)
+
+
 # ---------------------------------------------------------------------------
 # docker-compose.yml LLM-env-block removal regression lock
 # ---------------------------------------------------------------------------

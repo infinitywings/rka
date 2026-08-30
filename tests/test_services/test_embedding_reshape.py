@@ -11,6 +11,7 @@ import pytest
 from rka.services.embedding_reshape import (
     current_vec_claims_dim,
     current_vec_table_dim,
+    embedding_space_mismatch,
     reshape_all_vec_tables_if_needed,
     reshape_vec_claims,
     reshape_vec_claims_if_needed,
@@ -294,3 +295,46 @@ async def test_reshape_all_vec_tables_if_needed_idempotent_no_op(db):
         assert did_reshape is False, (
             f"second call must be a no-op for {table_name}"
         )
+
+
+@pytest.mark.asyncio
+async def test_force_rebuild_prevents_same_dimension_space_mixing(db):
+    """A space change rebuilds all vec tables even when dim is unchanged."""
+    if not db.vec_available:
+        pytest.skip("sqlite-vec extension not loaded")
+
+    await db.execute(
+        "INSERT INTO embedding_metadata "
+        "(project_id, entity_type, entity_id, content_hash, model_name, dimensions) "
+        "VALUES ('proj_default', 'journal', 'jrn_old', 'hash', 'old-space', 768)"
+    )
+    await db.commit()
+
+    results = await reshape_all_vec_tables_if_needed(db, dim=768, force=True)
+
+    assert all(did_rebuild for did_rebuild, _pending in results.values())
+    row = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM embedding_metadata WHERE model_name = 'old-space'"
+    )
+    assert row["n"] == 0
+    for table_name in results:
+        assert await current_vec_table_dim(db, table_name) == 768
+
+
+@pytest.mark.asyncio
+async def test_embedding_space_mismatch_detects_restart_recovery_need(db):
+    if not db.vec_available:
+        pytest.skip("sqlite-vec extension not loaded")
+
+    assert not await embedding_space_mismatch(db, model_name="current-space", dim=768)
+    await db.execute(
+        "INSERT INTO embedding_metadata "
+        "(project_id, entity_type, entity_id, content_hash, model_name, dimensions) "
+        "VALUES ('proj_default', 'journal', 'jrn_current', 'hash', "
+        "'current-space', 768)"
+    )
+    await db.commit()
+
+    assert not await embedding_space_mismatch(db, model_name="current-space", dim=768)
+    assert await embedding_space_mismatch(db, model_name="new-space", dim=768)
+    assert await embedding_space_mismatch(db, model_name="current-space", dim=1024)

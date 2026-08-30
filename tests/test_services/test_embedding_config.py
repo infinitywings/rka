@@ -151,6 +151,28 @@ def test_backup_overwritten_on_each_save(tmp_path: Path):
     assert backup_payload["config"]["model_name"] == "v2"
 
 
+def test_repairing_corrupt_live_config_preserves_good_backup(tmp_path: Path):
+    svc = EmbeddingConfigService(config_dir=tmp_path)
+    svc.save_config(
+        EmbeddingConfig(backend="fastembed", config={"model_name": "v1", "dim": 768}),
+        actor="pi",
+    )
+    svc.save_config(
+        EmbeddingConfig(backend="fastembed", config={"model_name": "v2", "dim": 768}),
+        actor="pi",
+    )
+    original_backup = svc.backup_path.read_text()
+    svc.config_path.write_text("corrupt {{{")
+
+    svc.save_config(
+        EmbeddingConfig(backend="fastembed", config={"model_name": "v3", "dim": 768}),
+        actor="repair",
+    )
+
+    assert svc.load_config().config["model_name"] == "v3"
+    assert svc.backup_path.read_text() == original_backup
+
+
 # ---------------------------------------------------------------------------
 # Atomic write semantics
 # ---------------------------------------------------------------------------
