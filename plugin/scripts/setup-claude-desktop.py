@@ -9,7 +9,7 @@ Behavior:
 2. Resolve plugin location (CLAUDE_PLUGIN_ROOT env, else cwd).
 3. Verify the wrapper script exists at <plugin>/bin/rka-mcp-bridge.py.
 4. Verify the RKA backend is reachable at integration.json's api_endpoint_url
-   (fallback http://localhost:9712); refuse setup if unreachable unless --force.
+   (fallback http://127.0.0.1:9712); refuse setup if unreachable unless --force.
 5. Backup existing claude_desktop_config.json to *.backup-YYYYMMDD-HHMMSS.
 6. Read existing config (start with {} if missing/empty; refuse to overwrite
    malformed JSON unless --force).
@@ -145,7 +145,7 @@ def main() -> int:
         return 2
 
     # Resolve API URL from integration.json (or default).
-    api_url = "http://localhost:9712"
+    api_url = "http://127.0.0.1:9712"
     if int_path.is_file():
         try:
             data = json.loads(int_path.read_text())
@@ -293,7 +293,7 @@ def main() -> int:
         print("  • Linux: use your desktop environment's Quit shortcut, then reopen")
     print()
     print("Then start a fresh chat and ask: \"List my RKA projects.\"")
-    print("Brain should call rka_list_projects and return the list.")
+    print('Brain should call rka_query with args={"operation":"list_projects"} and return the list.')
 
     return 0
 

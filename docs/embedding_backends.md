@@ -30,9 +30,12 @@ shape.
 
 ## When to use each
 
-- **FastEmbed** — first run, no external services, fully offline. 768-dim
-  vectors are fast and accurate for general English text. Best for "I
-  want it to work without doing anything."
+- **FastEmbed** — no external service is required, and it runs offline after
+  the model has been cached. The first uncached use downloads roughly 520 MB
+  of model data into the persistent FastEmbed cache, so the initial startup
+  needs network access or a pre-seeded cache. Its 768-dim vectors are fast and
+  accurate for general English text. Best for "I want it to work without
+  managing a separate embedding service."
 - **OpenAI-compat → a managed local sidecar or LM Studio** — when a local
   service exposes `/v1/embeddings`. Models that distinguish query and
   document inputs can use the optional templates described below.
