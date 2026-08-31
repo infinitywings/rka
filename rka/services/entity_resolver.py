@@ -24,6 +24,14 @@ Packet contract (``rka-entity-resolution/v1``):
 * optional edge arrays contain only rows whose stored ``project_id`` matches
   the requested project.
 
+Claim currency has two deliberately separate stored signals. ``stale`` is a
+hard structural invalidation (for example, the source decision or promoted
+interpretation was superseded). ``staleness`` is the freshness-review workflow
+state: ``yellow`` warns and ``red`` invalidates, while ``green`` only means no
+freshness-review warning is open. It does not cancel ``stale=True``. Consumers
+must use the derived ``currentness`` object as the canonical currency result
+rather than interpreting either similarly named field in isolation.
+
 ``revision.fingerprint`` is a stable digest of normalized stored state, tags,
 and server-derived claim contradiction state.  It is suitable for change
 detection, not as proof that an entity is scientifically valid.

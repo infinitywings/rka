@@ -45,18 +45,20 @@ async def _insert_claim(
     project_id: str,
     *,
     verified: int = 1,
+    stale: int = 0,
     staleness: str = "green",
 ) -> None:
     await db.execute(
         """INSERT INTO claims
            (id, source_entry_id, claim_type, content, verified, evidence_status,
             stale, staleness, project_id)
-           VALUES (?, ?, 'result', ?, ?, 'supported', 0, ?, ?)""",
+           VALUES (?, ?, 'result', ?, ?, 'supported', ?, ?, ?)""",
         [
             claim_id,
             source_id,
             f"Claim content for {claim_id}",
             verified,
+            stale,
             staleness,
             project_id,
         ],
@@ -267,6 +269,39 @@ async def test_currentness_fails_closed_on_expired_retracted_and_invalid_metadat
         "expired",
         "invalid_staleness:mystery",
     ]
+
+
+@pytest.mark.asyncio
+async def test_structural_stale_is_not_overridden_by_green_review_state(
+    db: Database,
+) -> None:
+    source_id = "jrn_resolver_structural_stale_source"
+    claim_id = "clm_resolver_structural_stale"
+    await _insert_journal(db, source_id, PROJECT_ID)
+    await _insert_claim(
+        db,
+        claim_id,
+        source_id,
+        PROJECT_ID,
+        stale=1,
+        staleness="green",
+    )
+    await db.commit()
+
+    packet = await EntityResolverService(db).resolve_entities(
+        PROJECT_ID,
+        [claim_id],
+    )
+    claim = packet["entities"][claim_id]
+
+    assert claim["stale"] is True
+    assert claim["staleness"] == "green"
+    assert claim["currentness"] == {
+        "is_current": False,
+        "state": "not_current",
+        "reasons": ["stale"],
+        "warnings": [],
+    }
 
 
 @pytest.mark.asyncio

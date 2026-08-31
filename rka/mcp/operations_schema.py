@@ -91,6 +91,8 @@ _ENUMS = {
         "methodology",
         "summary",
     ],
+    "journal_status": ["draft", "active", "superseded", "retracted"],
+    "bulk_entity_type": ["note", "journal", "decision", "literature"],
     "decided_by": ["pi", "brain", "executor"],
     "decision_kind": [
         "research_question",
@@ -542,7 +544,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             },
         ],
         "related_operations": ["provenance", "search"],
-        "notes": "Entity prefix is auto-routed (jrn_, dec_, lit_, mis_, clm_, ecl_, chk_).",
+        "notes": (
+            "Entity prefix is auto-routed (jrn_, dec_, lit_, mis_, clm_, ecl_, "
+            "chk_). For claims, stale is hard structural invalidation while "
+            "staleness is the freshness-review state; green does not override "
+            "stale=true. Treat currentness as the canonical currency result."
+        ),
     },
     "journal": {
         "operation": "journal",
@@ -2211,11 +2218,12 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "journal",
         "role_tag": "BRAIN",
-        "summary": "Update a journal entry (content, type, confidence, links).",
+        "summary": "Update journal content, metadata, lifecycle, pinning, or links.",
         "signature": (
             "rka_execute(operation='update_note', *, project_id, id, "
             "content=None, summary=None, type=None, confidence=None, "
-            "importance=None, tags=None, phase=None, related_decisions=None, "
+            "importance=None, status=None, pinned=None, tags=None, phase=None, "
+            "related_decisions=None, "
             "related_literature=None, related_mission=None)"
         ),
         "required_fields": ["project_id", "id"],
@@ -2225,6 +2233,8 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "type",
             "confidence",
             "importance",
+            "status",
+            "pinned",
             "tags",
             "phase",
             "verbatim_input",
@@ -2233,7 +2243,9 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
             "related_literature",
             "related_mission",
         ],
-        "enums": _e("confidence", "importance", "source", "note_type"),
+        "enums": _e(
+            "confidence", "importance", "source", "note_type", "journal_status"
+        ),
         "examples": [
             {
                 "description": "Promote a finding to verified.",
@@ -2242,6 +2254,16 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "project_id": "prj_01ABC...",
                     "id": "jrn_01XYZ...",
                     "confidence": "verified",
+                },
+            },
+            {
+                "description": "Supersede and unpin a journal entry.",
+                "call": {
+                    "operation": "update_note",
+                    "project_id": "prj_01ABC...",
+                    "id": "jrn_01XYZ...",
+                    "status": "superseded",
+                    "pinned": False,
                 },
             },
         ],
@@ -3360,11 +3382,11 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
         "tool": "rka_execute",
         "category": "core",
         "role_tag": "BRAIN",
-        "summary": "Update many entities in one atomic call.",
+        "summary": "Update many entities as one validated best-effort batch.",
         "signature": ("rka_execute(operation='bulk_update', *, project_id, updates)"),
         "required_fields": ["project_id", "updates"],
         "optional_fields": [],
-        "enums": {},
+        "enums": {"updates[].entity_type": list(_ENUMS["bulk_entity_type"])},
         "examples": [
             {
                 "description": "Bulk-tag many entities.",
@@ -3372,14 +3394,28 @@ OPERATIONS_SCHEMA: dict[str, dict[str, Any]] = {
                     "operation": "bulk_update",
                     "project_id": "prj_01ABC...",
                     "updates": [
-                        {"id": "jrn_01...", "tags": ["v2"]},
-                        {"id": "jrn_02...", "tags": ["v2"]},
+                        {
+                            "entity_type": "journal",
+                            "id": "jrn_01...",
+                            "tags": ["v2"],
+                        },
+                        {
+                            "entity_type": "journal",
+                            "id": "jrn_02...",
+                            "tags": ["v2"],
+                        },
                     ],
                 },
             },
         ],
         "related_operations": ["update_note", "update_decision"],
-        "notes": None,
+        "notes": (
+            "The canonical item shape is flat: entity_type + id + update fields. "
+            "Legacy nested data={...} is accepted, but mixing both shapes or "
+            "sending an empty update is rejected before any write. Preflight is "
+            "whole-batch; HTTP execution is best-effort and can partially succeed, "
+            "so this operation is not transactional across entities."
+        ),
     },
     # --- missions -------------------------------------------------------
     "create_mission": {

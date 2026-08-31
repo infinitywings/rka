@@ -707,6 +707,43 @@
     "bulk_update": {
       "category": "core",
       "input_schema": {
+        "$defs": {
+          "BulkUpdateItem": {
+            "additionalProperties": true,
+            "properties": {
+              "data": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "entity_type": {
+                "enum": [
+                  "note",
+                  "journal",
+                  "decision",
+                  "literature"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_type",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
         "additionalProperties": false,
         "properties": {
           "operation": {
@@ -719,8 +756,7 @@
           },
           "updates": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/$defs/BulkUpdateItem"
             },
             "minItems": 1,
             "type": "array"
@@ -5165,6 +5201,17 @@
             ],
             "default": null
           },
+          "pinned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "project_id": {
             "type": "string"
           },
@@ -5216,6 +5263,23 @@
                   "pi",
                   "web_ui",
                   "llm"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "draft",
+                  "active",
+                  "superseded",
+                  "retracted"
                 ],
                 "type": "string"
               },
@@ -5762,8 +5826,7 @@
               },
               "updates": {
                 "items": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/$defs/BulkUpdateItem"
                 },
                 "minItems": 1,
                 "type": "array"
@@ -5772,6 +5835,41 @@
             "required": [
               "project_id",
               "updates"
+            ],
+            "type": "object"
+          },
+          "BulkUpdateItem": {
+            "additionalProperties": true,
+            "properties": {
+              "data": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "entity_type": {
+                "enum": [
+                  "note",
+                  "journal",
+                  "decision",
+                  "literature"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_type",
+              "id"
             ],
             "type": "object"
           },
@@ -8566,6 +8664,17 @@
                 ],
                 "default": null
               },
+              "pinned": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "project_id": {
                 "type": "string"
               },
@@ -8617,6 +8726,23 @@
                       "pi",
                       "web_ui",
                       "llm"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "draft",
+                      "active",
+                      "superseded",
+                      "retracted"
                     ],
                     "type": "string"
                   },
