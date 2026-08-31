@@ -553,6 +553,8 @@ async def dispatch_review(target: str, *, project_id: str, payload: dict[str, An
             type=p.get("type"),
             confidence=p.get("confidence"),
             importance=p.get("importance"),
+            status=p.get("status"),
+            pinned=p.get("pinned"),
             verbatim_input=p.get("verbatim_input"),
             related_decisions=p.get("related_decisions"),
             related_literature=p.get("related_literature"),

@@ -44,6 +44,13 @@ Only IDs in formal search-result or graph-node fields count as retrieved.
 Identifiers merely mentioned in snippets, labels, or edge text do not improve
 recall.
 
+For claims, the stored signals named `stale` and `staleness` are not aliases.
+`stale=true` is a hard structural invalidation, such as a superseded source.
+`staleness` is the freshness-review state; `green` means there is no open
+freshness warning and does not make a structurally stale claim current. Clients
+must use the entity resolver's derived `currentness` result when deciding
+whether knowledge is current.
+
 ## Gate and thresholds
 
 Quality and isolation are strict:

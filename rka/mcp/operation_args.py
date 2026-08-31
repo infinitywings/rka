@@ -66,6 +66,9 @@ from rka.models.semantic_patch import (
     SemanticPatchProposalTransition,
 )
 from rka.models.outline import OutlineProposalRequest
+from rka.models.decision import DecisionUpdate
+from rka.models.journal import JournalEntryUpdate
+from rka.models.literature import LiteratureUpdate
 
 # NOTE: enum aliases from ``rka.mcp._enums`` are imported on a per-batch
 # basis. Batch A (query ops) doesn't directly type any enum field — query
@@ -141,6 +144,7 @@ from rka.mcp._enums import (  # noqa: E402, F811
 
 # Batch C imports — Update/Lifecycle/Submit enums.
 from rka.mcp._enums import (  # noqa: E402, F811
+    BulkEntityTypeLit,
     CheckpointResolvedByLit,
     ChkTypeLit,
     DecisionStatusLit,
@@ -3975,6 +3979,20 @@ class UpdateNoteArgs(ProjectScopedArgs):
         Optional[ImportanceLit],
         Field(default=None, description="New importance level."),
     ] = None
+    status: Annotated[
+        Optional[JournalStatusLit],
+        Field(
+            default=None,
+            description=(
+                "New journal lifecycle status "
+                "(draft|active|superseded|retracted)."
+            ),
+        ),
+    ] = None
+    pinned: Annotated[
+        Optional[bool],
+        Field(default=None, description="Whether the journal entry is pinned."),
+    ] = None
     tags: Annotated[
         Optional[list[str]],
         Field(default=None, description="Replacement tag list."),
@@ -4015,6 +4033,8 @@ class UpdateNoteArgs(ProjectScopedArgs):
             self.type,
             self.confidence,
             self.importance,
+            self.status,
+            self.pinned,
             self.tags,
             self.phase,
             self.verbatim_input,
@@ -4026,7 +4046,8 @@ class UpdateNoteArgs(ProjectScopedArgs):
         if all(f is None for f in mutable_fields):
             raise ValueError(
                 "update_note: at least one mutable field must be non-None "
-                "(content, summary, type, confidence, importance, tags, phase, "
+                "(content, summary, type, confidence, importance, status, pinned, "
+                "tags, phase, "
                 "verbatim_input, source, related_decisions, related_literature, "
                 "related_mission)."
             )
@@ -4380,30 +4401,77 @@ class UpdateMissionStatusArgs(ProjectScopedArgs):
     ] = None
 
 
+class BulkUpdateItem(BaseModel):
+    """One compatibility-safe item in a best-effort bulk update.
+
+    The typed contract historically advertised flat items while the legacy
+    adapter expected fields inside ``data``. Accept both shapes so existing
+    callers keep working, but reject mixed or empty payloads before any write.
+    Entity-specific REST models validate and normalize the mutable fields.
+    """
+
+    model_config = ConfigDict(extra="allow", use_enum_values=True)
+
+    entity_type: Annotated[
+        BulkEntityTypeLit,
+        Field(description="note|journal|decision|literature update target."),
+    ]
+    id: Annotated[str, Field(min_length=1, description="Entity id to update.")]
+    data: Annotated[
+        Optional[dict[str, Any]],
+        Field(
+            default=None,
+            description=(
+                "Legacy nested update fields. Prefer flat fields beside id and "
+                "entity_type; do not combine both shapes."
+            ),
+        ),
+    ] = None
+
+    def normalized_data(self) -> dict[str, Any]:
+        """Return entity-model-validated update data in JSON form."""
+        flat_data = dict(self.model_extra or {})
+        if self.data is not None and flat_data:
+            raise ValueError(
+                "bulk_update item cannot combine nested 'data' with flat update fields"
+            )
+        raw_data = self.data if self.data is not None else flat_data
+        model_type = {
+            "note": JournalEntryUpdate,
+            "journal": JournalEntryUpdate,
+            "decision": DecisionUpdate,
+            "literature": LiteratureUpdate,
+        }[self.entity_type]
+        validated = model_type.model_validate(raw_data)
+        normalized = validated.model_dump(mode="json", exclude_none=True)
+        if not normalized:
+            raise ValueError("bulk_update item must include at least one non-null update field")
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_shape_and_data(self) -> "BulkUpdateItem":
+        if not self.id.strip():
+            raise ValueError("bulk_update item id cannot be blank")
+        self.normalized_data()
+        return self
+
+
 class BulkUpdateArgs(ProjectScopedArgs):
-    """Update many entities in one atomic call."""
+    """Update many entities as a validated best-effort batch."""
 
     operation: Literal["bulk_update"] = "bulk_update"
 
     updates: Annotated[
-        list[dict[str, Any]],
+        list[BulkUpdateItem],
         Field(
             min_length=1,
             description=(
-                "List of update dicts. Each dict MUST include an 'id' "
-                "key plus the fields to update for that entity."
+                "List of validated updates. Each item requires entity_type and "
+                "id plus one or more flat update fields. Legacy nested data is "
+                "accepted for compatibility."
             ),
         ),
     ]
-
-    @model_validator(mode="after")
-    def _enforce_id_on_every_item(self) -> "BulkUpdateArgs":
-        for idx, item in enumerate(self.updates):
-            if not isinstance(item, dict):
-                raise ValueError(f"bulk_update: updates[{idx}] is not a dict.")
-            if "id" not in item or not item["id"]:
-                raise ValueError(f"bulk_update: updates[{idx}] missing required 'id' key.")
-        return self
 
 
 class SupersedeDecisionArgs(ProjectScopedArgs):
@@ -5354,6 +5422,7 @@ __all__ = [
     "UpdateMissionArgs",
     "UpdateStatusArgs",
     "UpdateMissionStatusArgs",
+    "BulkUpdateItem",
     "BulkUpdateArgs",
     "SupersedeDecisionArgs",
     "PresentDecisionArgs",

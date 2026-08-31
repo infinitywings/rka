@@ -207,6 +207,16 @@ JournalStatusLit = Literal[
     "retracted",
 ]
 
+# Entity aliases accepted by the compatibility-safe bulk-update adapter.
+# ``note`` is the historical MCP spelling; ``journal`` is the canonical
+# entity name used by the typed/query surfaces. Both route to /api/notes.
+BulkEntityTypeLit = Literal[
+    "note",
+    "journal",
+    "decision",
+    "literature",
+]
+
 # Validation-gate subtype — string-set validated in
 # ``rka/services/researcher_tools.py`` and the legacy
 # ``rka_create_gate`` MCP tool.

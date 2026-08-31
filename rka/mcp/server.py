@@ -836,6 +836,8 @@ async def rka_update_note(
     type: str | None = None,
     confidence: str | None = None,
     importance: str | None = None,
+    status: str | None = None,
+    pinned: bool | None = None,
     verbatim_input: str | None = None,
     related_decisions: list[str] | None = None,
     related_literature: list[str] | None = None,
@@ -856,6 +858,8 @@ async def rka_update_note(
         type: New type — note | log | directive
         confidence: New confidence level — hypothesis | tested | verified | superseded | retracted
         importance: New importance level — critical | high | normal | low
+        status: New lifecycle status — draft | active | superseded | retracted
+        pinned: Whether the journal entry is pinned
         verbatim_input: PI's exact words (preserves intellectual attribution)
         related_decisions: Decision IDs this note relates to
         related_literature: Literature IDs this note references
@@ -868,7 +872,8 @@ async def rka_update_note(
         body = {
             "content": content, "summary": summary, "type": type,
             "confidence": confidence,
-            "importance": importance, "verbatim_input": verbatim_input,
+            "importance": importance, "status": status, "pinned": pinned,
+            "verbatim_input": verbatim_input,
             "related_decisions": related_decisions,
             "related_literature": related_literature,
             "related_mission": related_mission, "tags": tags,
@@ -1642,60 +1647,83 @@ async def rka_bulk_update(
     *,
     project_id: str,
 ) -> str:
-    """PRIMARY FIELD: updates. Bulk update multiple entities in one
-    call.
+    """PRIMARY FIELD: updates. Validated best-effort entity updates.
 
-    Each update must have 'entity_type', 'id', and 'data' fields.
-    Supported entity_types: 'note', 'decision', 'literature'.
+    Canonical items are flat: ``entity_type`` + ``id`` + update fields.
+    The historical nested ``data={...}`` shape remains accepted. The full
+    batch is validated before the first HTTP request, but the requests are
+    independent and can partially succeed; this operation is not atomic.
 
     Args:
-        updates: List of updates (PRIMARY FIELD), e.g. [{"entity_type": "note", "id": "jrn_01...", "data": {"type": "note", "confidence": "verified", "tags": ["v1.6-audit"]}}]
+        updates: List of updates (PRIMARY FIELD), e.g. [{"entity_type":
+            "journal", "id": "jrn_01...", "status": "superseded"}]
     """
-    async with _client(project_id) as c:
-        results = []
-        errors = []
-        for i, upd in enumerate(updates):
-            etype = upd.get("entity_type")
-            eid = upd.get("id")
-            data = upd.get("data", {})
+    prepared: list[tuple[int, str, str, str, dict]] = []
+    errors: list[str] = []
+    for i, upd in enumerate(updates):
+        try:
+            item = _BulkUpdateItem.model_validate(upd)
+            data = item.normalized_data()
+        except Exception as exc:
+            detail = " ".join(str(exc).split())
+            errors.append(f"[{i}] invalid update: {detail[:300]}")
+            continue
+        endpoint = {
+            "note": f"/api/notes/{item.id}",
+            "journal": f"/api/notes/{item.id}",
+            "decision": f"/api/decisions/{item.id}",
+            "literature": f"/api/literature/{item.id}",
+        }[item.entity_type]
+        prepared.append((i, item.entity_type, item.id, endpoint, data))
 
-            if not etype or not eid:
-                errors.append(f"[{i}] missing entity_type or id")
-                continue
+    # Structural/data errors abort the whole batch before any write. Runtime
+    # HTTP failures can still leave earlier valid requests applied, which is
+    # why the public contract explicitly describes this as best-effort.
+    results: list[str] = []
+    if not errors:
+        async with _client(project_id) as c:
+            for i, etype, eid, endpoint, data in prepared:
+                try:
+                    r = await c.put(endpoint, json=data)
+                    if r.status_code >= 300:
+                        errors.append(
+                            f"[{i}] {etype} {eid} -> {r.status_code}: {r.text[:100]}"
+                        )
+                        continue
 
-            endpoint_map = {
-                "note": f"/api/notes/{eid}",
-                "journal": f"/api/notes/{eid}",
-                "decision": f"/api/decisions/{eid}",
-                "literature": f"/api/literature/{eid}",
-            }
-            endpoint = endpoint_map.get(etype)
-            if not endpoint:
-                errors.append(f"[{i}] unknown entity_type: {etype}")
-                continue
+                    readback = r.json()
+                    mismatched = [
+                        key
+                        for key, expected in data.items()
+                        if readback.get(key) != expected
+                    ]
+                    if mismatched:
+                        errors.append(
+                            f"[{i}] {etype} {eid} -> write response mismatch for "
+                            f"fields={','.join(mismatched)} (write may have occurred)"
+                        )
+                        continue
+                    results.append(
+                        f"[{i}] {etype} {eid} OK fields={','.join(data.keys())}"
+                    )
+                except Exception as exc:
+                    errors.append(
+                        f"[{i}] {etype} {eid} -> error: {str(exc)[:100]}"
+                    )
 
-            try:
-                r = await c.put(endpoint, json=data)
-                if r.status_code < 300:
-                    results.append(f"[{i}] {etype} {eid} OK")
-                else:
-                    errors.append(f"[{i}] {etype} {eid} -> {r.status_code}: {r.text[:100]}")
-            except Exception as e:
-                errors.append(f"[{i}] {etype} {eid} -> error: {str(e)[:100]}")
-
-        summary = f"Updated {len(results)}/{len(updates)}"
-        if errors:
-            summary += f" ({len(errors)} errors)"
-        lines = [summary, ""]
-        if results:
-            lines.append("Successes:")
-            lines.extend(results[:20])
-            if len(results) > 20:
-                lines.append(f"  ... and {len(results) - 20} more")
-        if errors:
-            lines.append("Errors:")
-            lines.extend(errors)
-        return "\n".join(lines)
+    summary = f"Updated {len(results)}/{len(updates)}"
+    if errors:
+        summary += f" ({len(errors)} errors)"
+    lines = [summary, ""]
+    if results:
+        lines.append("Successes:")
+        lines.extend(results[:20])
+        if len(results) > 20:
+            lines.append(f"  ... and {len(results) - 20} more")
+    if errors:
+        lines.append("Errors:")
+        lines.extend(errors)
+    return "\n".join(lines)
 
 
 # ============================================================
@@ -7843,6 +7871,7 @@ async def _query_post(project_id: str | None, path: str, body: dict | None = Non
 # ``RKA_LEGACY_TOOLS=1`` opt-in surface; the active @tool() decorators
 # bind to the typed wrappers.
 from rka.mcp.operation_args import (  # noqa: E402  (post-helper-import)
+    BulkUpdateItem as _BulkUpdateItem,
     ExecuteArgsUnion as _ExecuteArgsUnion,
     QueryArgsUnion as _QueryArgsUnion,
 )
