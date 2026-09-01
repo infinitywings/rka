@@ -55,15 +55,21 @@ release boundaries are recorded in
 The roadmap is ordered by dependency, not by invented delivery dates. Every
 milestone must satisfy its exit gate before dependent work is treated as ready.
 
-Portable installation and managed model lifecycle belong to the separate
+Portable installation and managed model lifecycle still belong to the separate
 future `rka-app`, not to a Core branch. Core's provider and vector-space side of
 that boundary is recorded in
 [ADR 0017](docs/adr/0017-portable-embedding-runtime-boundary.md). The Qwen
 standard-profile candidate remains gated by retrieval quality and real 16 GB
 Mac/Windows measurements; it is not yet a Core or App release default.
-The immediate external follow-up is a small `rka-app` sidecar prototype plus a
-frozen two-machine retrieval/hardware evaluation; those tasks consume Core's
-contract but do not extend the E0-E6 Core milestone hierarchy.
+
+The immediate adoption priority is not native desktop packaging or an
+RKA-operated cloud service. It is to lower the cost of evaluating and
+independently running RKA without weakening its local-first, researcher-
+controlled model. Local deployment remains the canonical path. The bounded
+alternatives are an official read-only sample-data demo and a data-free
+Hugging Face Space template that users may duplicate into infrastructure they
+own and administer. The access-and-trial sequence below consumes released Core
+artifacts but does not extend the E0-E6 Core milestone hierarchy.
 
 One bounded Core follow-up remains separate from the portable-runtime work:
 make explicit/manual embedding repair compare canonical content hashes and
@@ -91,6 +97,36 @@ roadmap.
 
 The detailed deliverables, rollback paths, and decision checkpoints for E0-E6
 are in the active execution plan linked above.
+
+## Local-first access and trial track
+
+This cross-cutting track runs alongside Core reliability and contract work. It
+must not turn RKA Project into the custodian of users' research data or make a
+third-party cloud account a dependency of the local distribution.
+
+| Order | Access milestone | Outcome | Exit gate summary |
+|---|---|---|---|
+| **A0** | **Agent-guided local setup** | Reduce the installation burden for researchers who already use Codex or Claude Code while keeping RKA, its database, and its embedding runtime on their own machine. | Fresh macOS, Windows, and Linux installations complete through an agent-guided path; health, worker, persistence, MCP access, export, and restart recovery are read back; no cloud service is required. |
+| **A1** | **Read-only public demo** | Let a potential user experience retrieval, decision history, provenance, and the research map against fixed sample data before installing RKA. | The demo accepts no uploads or user records, exposes no durable write path, warns against entering private information, and resets reproducibly to the published sample state. |
+| **A2** | **Bring-your-own Hugging Face Space template** | Offer an optional data-free deployment recipe for users who choose to run an independent RKA instance in their own Hugging Face account. | A user-owned private duplicate starts from a pinned Core release; the user controls storage, credentials, cost, upgrades, backup, and deletion; persistence and Codex/Claude Code access are verified; the documentation states that third-party cloud hosting is not equivalent to local privacy. |
+| **A3** | **Residual-friction review** | Decide whether a separate desktop application is justified after observing the remaining local-install and runtime-management burden. | Evidence from A0-A2 identifies a material problem that a native app would solve; any `rka-app` mission receives a separate PI decision, repository scope, privacy review, and release gate before implementation. |
+
+The access track has the following non-negotiable boundaries:
+
+- Local deployment is the recommended path for sensitive, unpublished,
+  regulated, contract-restricted, or otherwise private research material.
+- RKA Project may distribute code, documentation, a fixed read-only demo, and
+  a deployment template. It does not operate personal RKA instances, a shared
+  multi-tenant database, centralized backups, or a user-data control plane.
+- The public demo contains only published sample data and cannot become a
+  place for visitors to store their own records.
+- A duplicated Space belongs to the user. Its account, data, storage,
+  credentials, availability, billing, backup, deletion, and cloud-provider
+  privacy trade-offs remain under that user's control and responsibility.
+- Every optional cloud path must preserve Knowledge Pack export so the user
+  can move to local RKA without depending on Hugging Face or RKA Project.
+- No telemetry or administrator access to user-owned instances is required
+  for normal operation.
 
 ## Previous Workbench program status
 
