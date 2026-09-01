@@ -68,6 +68,11 @@ ENV RKA_DATA_DIR=/data \
     RKA_EMBEDDING_THREADS=2 \
     RKA_EMBEDDING_CACHE_DIR=/data/fastembed_cache
 
+LABEL org.opencontainers.image.title="RKA Core" \
+      org.opencontainers.image.description="Local-first research memory and evidence infrastructure" \
+      org.opencontainers.image.source="https://github.com/rka-project/rka-core" \
+      org.opencontainers.image.licenses="MIT"
+
 EXPOSE 9712
 
 # Health check

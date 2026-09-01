@@ -130,3 +130,9 @@ jobs:
           print(found);
           assert found == {'fastembed': True, 'sqlite_vec': True,
           'litellm': False, 'instructor': False}"
+
+      - name: Smoke-test the isolated Core image
+        run: >-
+          python scripts/container_image_smoke.py
+          --image rka-core:ci
+          --expected-version 3.0.0

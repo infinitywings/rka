@@ -185,6 +185,12 @@ Invoke-RestMethod http://127.0.0.1:9712/api/health
 
 Open [http://127.0.0.1:9712](http://127.0.0.1:9712). The interactive REST documentation is at [http://127.0.0.1:9712/docs](http://127.0.0.1:9712/docs). The MCP binary is `~/.local/bin/rka` on macOS/Linux and `%USERPROFILE%\.local\bin\rka.exe` on Windows. Client-specific Claude and Codex configuration, upgrades, and troubleshooting are documented in [INSTALL.md](INSTALL.md).
 
+Starting with the first successful container-enabled release, Core will also
+publish a multi-architecture image for downstream deployment tools. The image
+is not considered available until the release workflow and public
+anonymous-pull read-back succeed; deployment tools must pin the resulting
+digest. See [Core container image publication](docs/CONTAINER_IMAGE.md).
+
 > The first uncached FastEmbed startup downloads the embedding model. During that download or a generation rebuild after an upgrade/import, health remains available but semantic search can temporarily fall back to lexical retrieval. Check Settings for indexing progress before judging retrieval quality.
 
 ### 2. Begin a project
