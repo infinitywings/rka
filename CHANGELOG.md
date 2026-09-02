@@ -62,6 +62,9 @@ No unreleased changes.
 - SQLite backups now close both database connections before atomically
   publishing the temporary snapshot, avoiding Windows sharing violations while
   preserving the existing POSIX durability sequence.
+- Atomic snapshot publication now treats unsupported directory `fsync` and
+  descriptor-close errors consistently, so the completed backup is not
+  reported as failed on Windows.
 - **RKA Core is now a focused research-record and retrieval system.** Core owns
   durable journal, literature, decision, mission, claim, evidence, provenance,
   lifecycle, and retrieval contracts. Manuscript drafting and revision are

@@ -154,7 +154,11 @@ def fsync_directory(directory: Path) -> None:
         if exc.errno not in _UNSUPPORTED_DIRECTORY_FSYNC_ERRNOS:
             raise
     finally:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if exc.errno not in _UNSUPPORTED_DIRECTORY_FSYNC_ERRNOS:
+                raise
 
 
 _UNSUPPORTED_DIRECTORY_FSYNC_ERRNOS = {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import sqlite3
 import stat
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from rka.infra import sqlite_backup
-from rka.infra.sqlite_backup import backup_sqlite_database
+from rka.infra.sqlite_backup import backup_sqlite_database, fsync_directory
 
 
 def test_backup_includes_committed_rows_still_in_wal(tmp_path: Path) -> None:
@@ -68,6 +69,19 @@ def test_backup_closes_connections_before_atomic_publish(
     for connection in opened_connections:
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             connection.execute("SELECT 1")
+
+
+def test_directory_fsync_ignores_unsupported_windows_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unsupported(_descriptor: int) -> None:
+        raise OSError(errno.EBADF, "Bad file descriptor")
+
+    monkeypatch.setattr(sqlite_backup.os, "open", lambda *_args: 99)
+    monkeypatch.setattr(sqlite_backup.os, "fsync", unsupported)
+    monkeypatch.setattr(sqlite_backup.os, "close", unsupported)
+
+    fsync_directory(tmp_path)
 
 
 def test_backup_rejects_source_as_destination(tmp_path: Path) -> None:
