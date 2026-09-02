@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from rka.infra import sqlite_backup
-from rka.infra.sqlite_backup import backup_sqlite_database, fsync_directory
+from rka.infra.sqlite_backup import backup_sqlite_database, fsync_directory, fsync_file
 
 
 def test_backup_includes_committed_rows_still_in_wal(tmp_path: Path) -> None:
@@ -82,6 +82,26 @@ def test_directory_fsync_ignores_unsupported_windows_descriptor(
     monkeypatch.setattr(sqlite_backup.os, "close", unsupported)
 
     fsync_directory(tmp_path)
+
+
+def test_file_fsync_uses_writable_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "completed.bin"
+    target.write_bytes(b"complete")
+    real_open = Path.open
+    modes: list[str] = []
+
+    def tracked_open(path: Path, mode: str = "r", *args, **kwargs):
+        modes.append(mode)
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+
+    fsync_file(target)
+
+    assert modes == ["r+b"]
+    assert target.read_bytes() == b"complete"
 
 
 def test_backup_rejects_source_as_destination(tmp_path: Path) -> None:

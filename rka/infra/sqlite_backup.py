@@ -112,8 +112,7 @@ def backup_sqlite_database(
             )
 
         os.chmod(temporary_path, 0o600)
-        with temporary_path.open("rb") as backup_file:
-            os.fsync(backup_file.fileno())
+        fsync_file(temporary_path)
         digest = _sha256(temporary_path)
         size_bytes = temporary_path.stat().st_size
         os.replace(temporary_path, destination_path)
@@ -137,6 +136,15 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def fsync_file(path: Path) -> None:
+    """Persist a completed file using a Windows-compatible descriptor."""
+
+    # Windows' CRT-backed fsync rejects read-only descriptors with EBADF.
+    # The file is already complete, so open it read/write without truncation.
+    with path.open("r+b") as output:
+        os.fsync(output.fileno())
 
 
 def fsync_directory(directory: Path) -> None:
