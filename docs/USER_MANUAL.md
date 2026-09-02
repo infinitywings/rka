@@ -898,9 +898,9 @@ The Settings page shows API health status, database statistics, embedding backen
 The default Docker Compose deployment intentionally keeps the server, worker,
 database, and Phase-2 sidecar lock on the same `rka-data` named volume. Do not
 replace it with a Docker Desktop host bind mount in a multi-container setup:
-cross-container `flock` is not reliably propagated there. A custom deployment
-must place the database and sidecar on a shared filesystem with working advisory
-locks, or set `RKA_PHASE2_LOCK_PATH` to such a location for every RKA process.
+cross-container advisory locks are not reliably propagated there. A custom
+deployment must place the database and sidecar on a shared filesystem with working
+advisory locks, or set `RKA_PHASE2_LOCK_PATH` to such a location for every RKA process.
 
 ### 18.2 — Embedding Settings
 

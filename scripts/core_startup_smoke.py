@@ -247,6 +247,35 @@ def _assert_migration_state(db_path: Path, *, require_vec: bool) -> None:
         raise RuntimeError(f"migrate omitted Phase-2 tables: {sorted(missing_tables)}")
 
 
+def _probe_phase2_file_lock(
+    python: str, db_path: Path, env: dict[str, str], cwd: Path
+) -> None:
+    """Exercise real lock contention through the selected installed package."""
+    probe = """
+import asyncio
+import sys
+from rka.infra.database import Database
+
+async def main():
+    first = Database(sys.argv[1])
+    second = Database(sys.argv[1])
+    async with first._phase2_schema_lock():
+        try:
+            async with second._phase2_schema_lock():
+                raise RuntimeError("contended Phase-2 sidecar lock was entered")
+        except TimeoutError:
+            pass
+    async with second._phase2_schema_lock():
+        pass
+
+asyncio.run(main())
+"""
+    probe_env = env.copy()
+    probe_env["RKA_MIGRATION_LOCK_TIMEOUT_MS"] = "25"
+    probe_env["RKA_PHASE2_LOCK_PATH"] = str(db_path.with_suffix(".lock"))
+    _run_cli([python], ["-c", probe, str(db_path)], probe_env, cwd)
+
+
 async def _probe_mcp(
     python: str, cwd: Path, env: dict[str, str], errlog: TextIO
 ) -> None:
@@ -355,6 +384,12 @@ def main() -> None:
         if stray_db != db_path and stray_db.exists():
             raise RuntimeError(f"RKA created a cwd-relative database: {stray_db}")
         _assert_migration_state(db_path, require_vec=args.require_vec)
+        _probe_phase2_file_lock(
+            runtime_python,
+            data_dir / "phase2-lock-probe.db",
+            env,
+            runtime_cwd,
+        )
         worker_output = _run_cli(cli, ["worker", "--once"], env, runtime_cwd)
 
         log_path = data_dir / "server.log"
@@ -455,7 +490,7 @@ def main() -> None:
 
         print(
             "Core startup smoke passed: installed entry point, migrations, "
-            "public REST workflow, MCP, worker"
+            "Phase-2 file locking, public REST workflow, MCP, worker"
             + (", sqlite-vec" if args.require_vec else "")
             + (", and web dashboard." if args.require_web else ".")
         )

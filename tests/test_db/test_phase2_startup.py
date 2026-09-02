@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
 from pathlib import Path
 
 import pytest
 
 from rka.infra.database import Database
+from rka.infra.file_lock import release_exclusive, try_acquire_exclusive
 
 
 @pytest.mark.asyncio
@@ -51,14 +51,19 @@ async def test_phase2_schema_lock_has_bounded_wait(
     await db.connect()
     lock_path = db_path.with_name(f"{db_path.name}.phase2.lock")
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert try_acquire_exclusive(lock_fd)
     monkeypatch.setenv("RKA_MIGRATION_LOCK_TIMEOUT_MS", "25")
 
     try:
-        with pytest.raises(TimeoutError, match="Phase 2 startup lock"):
-            async with db._phase2_schema_lock():
-                pytest.fail("contended sidecar lock must not be entered")
+        try:
+            with pytest.raises(TimeoutError, match="Phase 2 startup lock"):
+                async with db._phase2_schema_lock():
+                    pytest.fail("contended sidecar lock must not be entered")
+        finally:
+            release_exclusive(lock_fd)
+            os.close(lock_fd)
+
+        async with db._phase2_schema_lock():
+            pass
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
         await db.close()

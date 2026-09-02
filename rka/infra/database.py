@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import logging
 import os
 import re
@@ -13,6 +12,8 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import aiosqlite
+
+from rka.infra.file_lock import release_exclusive, try_acquire_exclusive
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +278,7 @@ class Database:
         process that has already loaded sqlite-vec can retain an obsolete
         virtual-table schema while the first process rebuilds vec0 shadow
         tables, which can corrupt the database or crash the waiting process in
-        native code. The sidecar flock is shared by server/worker containers
+        native code. The sidecar file lock is shared by server/worker containers
         and covers extension loading, vec table creation, runtime upgrades,
         and vec-dependent migrations as one startup unit.
         """
@@ -314,23 +315,21 @@ class Database:
         acquired = False
         try:
             while True:
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if try_acquire_exclusive(lock_fd):
                     acquired = True
                     break
-                except BlockingIOError:
-                    remaining = deadline - loop.time()
-                    if remaining <= 0:
-                        raise TimeoutError(
-                            "Timed out waiting for sqlite-vec Phase 2 "
-                            f"startup lock: {lock_path}"
-                        )
-                    await asyncio.sleep(min(0.05, remaining))
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        "Timed out waiting for sqlite-vec Phase 2 "
+                        f"startup lock: {lock_path}"
+                    )
+                await asyncio.sleep(min(0.05, remaining))
             yield
         finally:
             try:
                 if acquired:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    release_exclusive(lock_fd)
             finally:
                 os.close(lock_fd)
 

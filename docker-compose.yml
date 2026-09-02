@@ -48,7 +48,7 @@ services:
       - "127.0.0.1:9712:9712"
     volumes:
       # Keep server and worker on the same Docker named volume. Phase-2
-      # sqlite-vec startup uses a sidecar flock in /data; Docker Desktop host
+      # sqlite-vec startup uses a sidecar file lock in /data; Docker Desktop host
       # bind mounts do not reliably propagate that lock across containers.
       - rka-data:/data
     environment:

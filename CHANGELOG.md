@@ -52,6 +52,10 @@ No unreleased changes.
 - Production container builds now pin multi-architecture Node, Python, and uv
   manifest digests, verify the sqlite-vec source archive checksum, install the
   reviewed `uv.lock`, and pin Core CI actions to immutable commits.
+- Phase-2 sqlite-vec startup and frozen manuscript-source compatibility writes
+  now use one cross-platform advisory-lock backend (`fcntl` on POSIX and
+  `msvcrt` on Windows). The installed-wheel smoke exercises actual lock
+  contention and release on every supported OS/Python combination.
 - **RKA Core is now a focused research-record and retrieval system.** Core owns
   durable journal, literature, decision, mission, claim, evidence, provenance,
   lifecycle, and retrieval contracts. Manuscript drafting and revision are
