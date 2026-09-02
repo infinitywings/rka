@@ -56,6 +56,9 @@ No unreleased changes.
   now use one cross-platform advisory-lock backend (`fcntl` on POSIX and
   `msvcrt` on Windows). The installed-wheel smoke exercises actual lock
   contention and release on every supported OS/Python combination.
+- CLI startup output now escapes characters unsupported by a legacy console
+  encoding instead of aborting on redirected Windows `cp1252` streams. UTF-8
+  terminals continue to receive the original Unicode output.
 - **RKA Core is now a focused research-record and retrieval system.** Core owns
   durable journal, literature, decision, mission, claim, evidence, provenance,
   lifecycle, and retrieval contracts. Manuscript drafting and revision are
