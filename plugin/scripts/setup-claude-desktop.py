@@ -2,7 +2,7 @@
 """setup-claude-desktop.py — write the rka MCP entry into claude_desktop_config.json.
 
 Cross-platform helper invoked by the /rka-setup-claude-desktop slash command
-(or directly: python3 plugin/scripts/setup-claude-desktop.py [--force]).
+(or directly: uv run --no-project plugin/scripts/setup-claude-desktop.py [--force]).
 
 Behavior:
 1. Detect OS, resolve `claude_desktop_config.json` and `integration.json` paths.
@@ -43,7 +43,13 @@ from pathlib import Path
 
 def claude_desktop_config_path() -> Path:
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Claude"
+            / "claude_desktop_config.json"
+        )
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA")
         if not appdata:
@@ -74,19 +80,25 @@ def resolve_plugin_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def python_command_for_mcp_config() -> str:
-    """Use the absolute path to the Python interpreter that's running this script.
+def uv_command_for_mcp_config() -> str:
+    """Return a stable absolute uv executable for GUI-launched Claude Desktop."""
+    command = shutil.which("uv")
+    if not command:
+        raise FileNotFoundError(
+            "uv was not found on PATH; install it from "
+            "https://docs.astral.sh/uv/getting-started/installation/"
+        )
+    # Keep a Homebrew or package-manager symlink stable across tool upgrades;
+    # Path.resolve() could instead persist a versioned Cellar target.
+    return str(Path(command).expanduser().absolute())
 
-    Hard-coding the absolute path avoids the brittle "is `python3` on PATH at
-    Claude Desktop's runtime?" question. Whatever Python the user has now will
-    still work after a Claude Desktop restart, even if PATH is stripped.
-    """
-    return sys.executable
 
-
-def python_args_prefix() -> list[str]:
-    """No extra prefix args needed when invoking via sys.executable directly."""
-    return []
+def mcp_entry(wrapper_path: Path) -> dict[str, object]:
+    """Build the same cross-platform launcher shape used by the plugin."""
+    return {
+        "command": uv_command_for_mcp_config(),
+        "args": ["run", "--no-project", str(wrapper_path)],
+    }
 
 
 def check_backend_reachable(api_url: str, timeout: float = 3.0) -> tuple[bool, str]:
@@ -103,7 +115,9 @@ def check_backend_reachable(api_url: str, timeout: float = 3.0) -> tuple[bool, s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Set up Claude Desktop's MCP config to use the RKA wrapper.")
+    parser = argparse.ArgumentParser(
+        description="Set up Claude Desktop's MCP config to use the RKA wrapper."
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -128,8 +142,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    config_path = args.config_path or claude_desktop_config_path()
-    plugin_root = args.plugin_root or resolve_plugin_root()
+    config_path = (args.config_path or claude_desktop_config_path()).expanduser().resolve()
+    plugin_root = (args.plugin_root or resolve_plugin_root()).expanduser().resolve()
     int_path = integration_path()
 
     print(f"OS: {sys.platform}")
@@ -142,6 +156,12 @@ def main() -> int:
     if not wrapper_path.is_file():
         print(f"\nERROR: wrapper script not found at: {wrapper_path}", file=sys.stderr)
         print("Re-install the rka plugin via /plugin install rka@rka.", file=sys.stderr)
+        return 2
+
+    try:
+        new_entry = mcp_entry(wrapper_path)
+    except FileNotFoundError as exc:
+        print(f"\nERROR: {exc}", file=sys.stderr)
         return 2
 
     # Resolve API URL from integration.json (or default).
@@ -170,11 +190,6 @@ def main() -> int:
             return 1
         print("--force given; continuing despite unreachable backend.", file=sys.stderr)
 
-    # Build the new mcpServers.rka entry.
-    new_entry: dict[str, object] = {
-        "command": python_command_for_mcp_config(),
-        "args": [*python_args_prefix(), str(wrapper_path)],
-    }
     print(f"\nNew mcpServers.rka entry: {json.dumps(new_entry, indent=2)}")
 
     # Read existing config (with malformed-JSON guard).
@@ -217,7 +232,9 @@ def main() -> int:
     if "rka" in mcp_servers:
         current = mcp_servers["rka"]
         if current == new_entry:
-            print("\nClaude Desktop is already configured with the correct rka MCP entry — nothing to do.")
+            print(
+                "\nClaude Desktop is already configured with the correct rka MCP entry — nothing to do."
+            )
             return 0
         if not args.force:
             print(
@@ -292,8 +309,10 @@ def main() -> int:
     else:
         print("  • Linux: use your desktop environment's Quit shortcut, then reopen")
     print()
-    print("Then start a fresh chat and ask: \"List my RKA projects.\"")
-    print('Brain should call rka_query with args={"operation":"list_projects"} and return the list.')
+    print('Then start a fresh chat and ask: "List my RKA projects."')
+    print(
+        'Brain should call rka_query with args={"operation":"list_projects"} and return the list.'
+    )
 
     return 0
 

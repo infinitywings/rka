@@ -35,6 +35,29 @@ ghcr.io/rka-project/rka-core@sha256:<manifest-digest>
 BuildKit also publishes SBOM and provenance material. GitHub records a separate
 artifact attestation bound to the same manifest digest.
 
+## Reviewed build inputs
+
+The production Dockerfile pins the multi-architecture manifest digests for its
+Node, Python, and uv images. Python dependencies are installed from the checked
+in `uv.lock` with `uv sync --locked`; npm uses `npm ci` and the checked-in lock;
+and the sqlite-vec amalgamation download is verified against a committed
+SHA-256 before compilation.
+
+Updating one of these inputs is a reviewed maintenance change:
+
+1. inspect the new tag with `docker buildx imagetools inspect` and record the
+   top-level OCI index digest, not a host-specific child manifest;
+2. obtain the sqlite-vec asset from its official GitHub Release and independently
+   compute `shasum -a 256` when the GitHub API does not publish an asset digest;
+3. update the Dockerfile and `uv.lock` together as applicable;
+4. build with a unique local tag and run `scripts/container_image_smoke.py`; and
+5. let the release workflow rebuild both `linux/amd64` and `linux/arm64`.
+
+Digest pinning makes upstream inputs reviewable and prevents a later tag move
+from silently changing a release build. System package repositories may still
+publish newer packages between builds, so the project does not claim
+bit-for-bit reproducibility.
+
 ## First-publication read-back gate
 
 GitHub Container Registry package visibility can depend on organization and

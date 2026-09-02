@@ -5,9 +5,32 @@ from scripts.validate_container_release import project_version, validate_release
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "publish-container.yml"
+DOCKERFILE = ROOT / "Dockerfile"
 
 
 class ContainerReleaseTests(TestCase):
+    def test_dockerfile_pins_inputs_and_installs_the_reviewed_lock(self) -> None:
+        dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        from_lines = [
+            line for line in dockerfile.splitlines() if line.startswith("FROM ")
+        ]
+
+        self.assertGreaterEqual(len(from_lines), 4)
+        for line in from_lines:
+            image = line.split()[1]
+            self.assertRegex(image, r"^[^@]+@sha256:[0-9a-f]{64}$")
+
+        self.assertIn("ARG SQLITE_VEC_SHA256=", dockerfile)
+        self.assertIn('sha256sum -c -', dockerfile)
+        self.assertIn("COPY pyproject.toml uv.lock ./", dockerfile)
+        self.assertIn("uv sync --locked --no-dev --no-editable", dockerfile)
+        self.assertNotIn('pip install --no-cache-dir ".[', dockerfile)
+
+        runtime = dockerfile.split(" AS runtime", maxsplit=1)[1]
+        self.assertIn("COPY --from=python-deps /app/.venv /app/.venv", runtime)
+        self.assertNotIn("apt-get", runtime)
+        self.assertNotIn("/usr/local/bin/uv", runtime)
+
     def test_current_core_version_has_an_exact_release_tag(self) -> None:
         version = project_version(ROOT / "pyproject.toml")
         self.assertEqual(validate_release_tag(f"v{version}", version), version)

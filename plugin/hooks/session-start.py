@@ -18,6 +18,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+DEFAULT_API_URL = "http://127.0.0.1:9712"
+MAX_HEALTH_BODY_BYTES = 4096
+
 
 def integration_path() -> Path:
     """OS-specific default location for integration.json."""
@@ -37,12 +40,26 @@ def integration_path() -> Path:
     return base / "RKA" / "integration.json"
 
 
+def version_from_health(body: bytes, fallback: str) -> str:
+    """Prefer the backend's live version without trusting an unbounded body."""
+    try:
+        payload = json.loads(body.decode("utf-8", errors="replace"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return fallback
+    if not isinstance(payload, dict):
+        return fallback
+    version = payload.get("version")
+    if not isinstance(version, str) or not version.strip():
+        return fallback
+    return version.strip()
+
+
 def main() -> None:
     int_path = integration_path()
 
     if not int_path.is_file():
         # Without integration.json we can still try the default API URL.
-        api_url = "http://localhost:9712"
+        api_url = DEFAULT_API_URL
         version_str = "unknown"
     else:
         try:
@@ -54,14 +71,16 @@ def main() -> None:
             )
             sys.exit(0)
 
-        api_url = (data.get("api_endpoint_url") or "http://127.0.0.1:9712").strip()
+        api_url = (data.get("api_endpoint_url") or DEFAULT_API_URL).strip()
         version_str = (data.get("backend_version") or data.get("version") or "unknown").strip()
 
     health_url = api_url.rstrip("/") + "/api/health"
     try:
         with urllib.request.urlopen(health_url, timeout=3) as resp:
-            body = resp.read().decode("utf-8", errors="replace")[:200]
+            body_bytes = resp.read(MAX_HEALTH_BODY_BYTES)
+            body = body_bytes.decode("utf-8", errors="replace")
             if resp.status == 200:
+                version_str = version_from_health(body_bytes, version_str)
                 print(
                     f"✅ RKA reachable at {api_url} (version {version_str}; explicit project_id required per operation)."
                 )
@@ -70,6 +89,12 @@ def main() -> None:
                     f"⚠️  RKA at {api_url} returned HTTP {resp.status}: {body}. "
                     f"Tool calls may fail until the backend is healthy."
                 )
+    except urllib.error.HTTPError as exc:
+        body = exc.read(MAX_HEALTH_BODY_BYTES).decode("utf-8", errors="replace")
+        print(
+            f"⚠️  RKA at {api_url} returned HTTP {exc.code}: {body}. "
+            f"Tool calls may fail until the backend is healthy."
+        )
     except urllib.error.URLError as exc:
         print(
             f"⚠️  RKA NOT reachable at {api_url} ({exc.reason}). "

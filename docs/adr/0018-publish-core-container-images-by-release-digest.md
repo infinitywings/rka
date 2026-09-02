@@ -44,6 +44,9 @@ runtime, and provenance checks.
 - A GitHub Release may take longer because it includes an `arm64` build,
   isolated runtime probes, manifest validation, SBOM generation, and
   attestation verification.
-- The Dockerfile's upstream base references are not yet digest-pinned, so the
-  workflow provides immutable output identity and provenance rather than a
-  claim of bit-for-bit reproducible rebuilding.
+- The Dockerfile pins upstream multi-architecture base manifests, verifies the
+  downloaded sqlite-vec source archive, and installs Python dependencies from
+  the reviewed lock. Moving upstream tags cannot silently change those inputs.
+- System package repositories remain time-varying, so the workflow provides
+  substantially stronger input integrity without claiming bit-for-bit
+  reproducible rebuilding.

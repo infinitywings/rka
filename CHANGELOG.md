@@ -5,6 +5,10 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [3.0.0] — 2026-09-01 (RKA Core / Writer separation)
+
 ### Added
 
 - A release-only GHCR workflow now preflight-smokes, builds, publishes, and
@@ -25,6 +29,11 @@ All notable changes to RKA are documented here. Format loosely follows
 - A clean-wheel CI gate now installs the built `rka-core` artifact outside the
   checkout and verifies migrations, SQLite/FTS retrieval, REST health, the
   worker, and the five-tool MCP surface.
+- The wheel artifact gate now exercises Python 3.11 and 3.13 on Linux, macOS,
+  and Windows through one OS-neutral disposable-venv launcher.
+- Claude Code and Claude Desktop plugin entry points now use
+  `uv run --no-project` across operating systems. The SessionStart probe uses
+  the IPv4 loopback default and reports the live backend health version.
 - `python -m rka` is now a supported entry point alongside the `rka` command.
 
 ### Changed
@@ -40,11 +49,9 @@ All notable changes to RKA are documented here. Format loosely follows
 - Dockerless state now defaults consistently to `~/.rka/rka.db`, independent
   of the current working directory. The base wheel defaults optional
   embeddings off; the Docker/full profile enables them explicitly.
-
-## [3.0.0] — 2026-08-26 (RKA Core / Writer separation)
-
-### Changed
-
+- Production container builds now pin multi-architecture Node, Python, and uv
+  manifest digests, verify the sqlite-vec source archive checksum, install the
+  reviewed `uv.lock`, and pin Core CI actions to immutable commits.
 - **RKA Core is now a focused research-record and retrieval system.** Core owns
   durable journal, literature, decision, mission, claim, evidence, provenance,
   lifecycle, and retrieval contracts. Manuscript drafting and revision are
@@ -144,6 +151,9 @@ All notable changes to RKA are documented here. Format loosely follows
   immutable heads, and rolls back atomically on integrity failure.
 
 ## [2.9.0] — 2026-07-23 (Native claim spine + provenance-gated Writer)
+
+> **Untagged development milestone.** Version 2.9.0 was not published as a
+> standalone GitHub release; its changes are included in the 3.0.0 release.
 
 This release integrates the native manuscript/claim-spine branch with the
 2.8.1 ChatGPT connector and Writer review work from `main`. It adds a durable,
