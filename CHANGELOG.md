@@ -7,6 +7,9 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ### Added
 
+- A release-only GHCR workflow now preflight-smokes, builds, publishes, and
+  attests `linux/amd64` and `linux/arm64` Core images. Downstream releases use
+  the emitted manifest digest rather than a mutable container tag.
 - Versioned Core capability discovery now exposes the package and public
   contract versions through REST and the existing five-tool MCP dispatch
   surface. Clients can require a Core contract or runtime capability and
