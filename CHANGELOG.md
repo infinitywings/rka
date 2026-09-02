@@ -63,8 +63,9 @@ No unreleased changes.
   publishing the temporary snapshot, avoiding Windows sharing violations while
   preserving the existing POSIX durability sequence.
 - Atomic snapshot and Writer-export publication now use the writable file
-  descriptors required by Windows `fsync`, and treat unsupported directory
-  `fsync` and descriptor-close errors consistently.
+  descriptors required by Windows `fsync`. Windows skips unsupported POSIX
+  directory `fsync` without retaining a handle that blocks temporary-directory
+  cleanup; supported platforms retain the existing rename-durability step.
 - **RKA Core is now a focused research-record and retrieval system.** Core owns
   durable journal, literature, decision, mission, claim, evidence, provenance,
   lifecycle, and retrieval contracts. Manuscript drafting and revision are

@@ -150,6 +150,12 @@ def fsync_file(path: Path) -> None:
 def fsync_directory(directory: Path) -> None:
     """Persist the atomic rename where directory fsync is supported."""
 
+    # Windows does not provide POSIX directory fsync semantics. Opening a
+    # directory through the CRT solely to probe fsync can retain a directory
+    # handle after EBADF and prevent a disposable directory from being removed.
+    if os.name == "nt":
+        return
+
     try:
         descriptor = os.open(directory, os.O_RDONLY)
     except OSError as exc:

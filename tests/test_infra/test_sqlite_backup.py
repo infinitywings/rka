@@ -77,9 +77,22 @@ def test_directory_fsync_ignores_unsupported_windows_descriptor(
     def unsupported(_descriptor: int) -> None:
         raise OSError(errno.EBADF, "Bad file descriptor")
 
+    monkeypatch.setattr(sqlite_backup.os, "name", "posix")
     monkeypatch.setattr(sqlite_backup.os, "open", lambda *_args: 99)
     monkeypatch.setattr(sqlite_backup.os, "fsync", unsupported)
     monkeypatch.setattr(sqlite_backup.os, "close", unsupported)
+
+    fsync_directory(tmp_path)
+
+
+def test_directory_fsync_does_not_open_windows_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_open(*_args):
+        raise AssertionError("Windows directory fsync must not open a descriptor")
+
+    monkeypatch.setattr(sqlite_backup.os, "name", "nt")
+    monkeypatch.setattr(sqlite_backup.os, "open", unexpected_open)
 
     fsync_directory(tmp_path)
 
