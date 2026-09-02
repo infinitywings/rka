@@ -59,6 +59,9 @@ No unreleased changes.
 - CLI startup output now escapes characters unsupported by a legacy console
   encoding instead of aborting on redirected Windows `cp1252` streams. UTF-8
   terminals continue to receive the original Unicode output.
+- SQLite backups now close both database connections before atomically
+  publishing the temporary snapshot, avoiding Windows sharing violations while
+  preserving the existing POSIX durability sequence.
 - **RKA Core is now a focused research-record and retrieval system.** Core owns
   durable journal, literature, decision, mission, claim, evidence, provenance,
   lifecycle, and retrieval contracts. Manuscript drafting and revision are

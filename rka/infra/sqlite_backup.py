@@ -7,6 +7,7 @@ import hashlib
 import os
 import sqlite3
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,8 +76,10 @@ def backup_sqlite_database(
     try:
         source_uri = f"{source_path.as_uri()}?mode=ro"
         with (
-            sqlite3.connect(source_uri, uri=True, timeout=30) as source_connection,
-            sqlite3.connect(temporary_path) as destination_connection,
+            closing(
+                sqlite3.connect(source_uri, uri=True, timeout=30)
+            ) as source_connection,
+            closing(sqlite3.connect(temporary_path)) as destination_connection,
         ):
             source_connection.execute("PRAGMA query_only = ON")
             source_connection.backup(destination_connection)
