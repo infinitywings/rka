@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import errno
 import sqlite3
 import stat
 from pathlib import Path
 
 import pytest
 
-from rka.infra.sqlite_backup import backup_sqlite_database
+from rka.infra import sqlite_backup
+from rka.infra.sqlite_backup import backup_sqlite_database, fsync_directory, fsync_file
 
 
 def test_backup_includes_committed_rows_still_in_wal(tmp_path: Path) -> None:
@@ -41,6 +43,78 @@ def test_backup_includes_committed_rows_still_in_wal(tmp_path: Path) -> None:
     assert result.page_count > 0
     assert result.foreign_key_violations == 0
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+
+
+def test_backup_closes_connections_before_atomic_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.db"
+    destination = tmp_path / "backup.db"
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+
+    opened_connections: list[sqlite3.Connection] = []
+    real_connect = sqlite3.connect
+
+    def tracked_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        opened_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite_backup.sqlite3, "connect", tracked_connect)
+
+    backup_sqlite_database(source, destination)
+
+    assert len(opened_connections) == 2
+    for connection in opened_connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+
+
+def test_directory_fsync_ignores_unsupported_windows_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unsupported(_descriptor: int) -> None:
+        raise OSError(errno.EBADF, "Bad file descriptor")
+
+    monkeypatch.setattr(sqlite_backup.os, "name", "posix")
+    monkeypatch.setattr(sqlite_backup.os, "open", lambda *_args: 99)
+    monkeypatch.setattr(sqlite_backup.os, "fsync", unsupported)
+    monkeypatch.setattr(sqlite_backup.os, "close", unsupported)
+
+    fsync_directory(tmp_path)
+
+
+def test_directory_fsync_does_not_open_windows_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_open(*_args):
+        raise AssertionError("Windows directory fsync must not open a descriptor")
+
+    monkeypatch.setattr(sqlite_backup.os, "name", "nt")
+    monkeypatch.setattr(sqlite_backup.os, "open", unexpected_open)
+
+    fsync_directory(tmp_path)
+
+
+def test_file_fsync_uses_writable_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "completed.bin"
+    target.write_bytes(b"complete")
+    real_open = Path.open
+    modes: list[str] = []
+
+    def tracked_open(path: Path, mode: str = "r", *args, **kwargs):
+        modes.append(mode)
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+
+    fsync_file(target)
+
+    assert modes == ["r+b"]
+    assert target.read_bytes() == b"complete"
 
 
 def test_backup_rejects_source_as_destination(tmp_path: Path) -> None:

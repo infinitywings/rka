@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -18,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 from rka.config import RKAConfig
+from rka.infra.file_lock import release_exclusive, try_acquire_exclusive
 from rka.infra.ids import generate_id
 from rka.models.manuscript_source import (
     ManuscriptSourceProposalCreate,
@@ -1175,17 +1175,18 @@ class ManuscriptSourceService(BaseService):
     async def _source_lock(self, manuscript_id: str, relative_path: str):
         """Serialize same-file state transitions without blocking the event loop."""
         lock_fd = self._open_lock_fd(manuscript_id, relative_path)
+        acquired = False
         try:
             while True:
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if try_acquire_exclusive(lock_fd):
+                    acquired = True
                     break
-                except BlockingIOError:
-                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0.01)
             yield
         finally:
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                if acquired:
+                    release_exclusive(lock_fd)
             finally:
                 os.close(lock_fd)
 

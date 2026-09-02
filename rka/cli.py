@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import click
@@ -10,11 +11,30 @@ import click
 from rka import __version__
 
 
+def _configure_console_output() -> None:
+    """Keep CLI output alive when a legacy console cannot encode Unicode.
+
+    UTF-8 terminals are unchanged. On streams such as a redirected Windows
+    cp1252 console, unsupported characters are rendered as ASCII escape
+    sequences instead of aborting the server before startup.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (OSError, ValueError):
+            # Test runners and embedded hosts may expose a closed, detached,
+            # or otherwise non-reconfigurable text stream.
+            pass
+
+
 @click.group()
 @click.version_option(version=__version__)
 def main():
     """Research Knowledge Agent — AI-assisted research orchestration."""
-    pass
+    _configure_console_output()
 
 
 # Register the cred-vault subcommand group (Phase 1 — local-first creds).
@@ -146,7 +166,6 @@ def worker(
     """Run the background enrichment worker."""
     from rka.config import RKAConfig
     from rka.infra.database import Database
-    from rka.infra.embeddings import EmbeddingService
     from rka.services.worker import EnrichmentWorker
 
     config = RKAConfig()
@@ -356,7 +375,6 @@ def start_all(host: str, port: int, foreground: bool):
     directory so stop-all can find the processes.
     """
     import os
-    import signal
     import subprocess
     import sys
     import time
@@ -440,7 +458,7 @@ def start_all(host: str, port: int, foreground: bool):
     click.echo(f"   Server: http://{host}:{port} (pid {serve_proc.pid})")
     click.echo(f"   Worker: pid {worker_proc.pid}")
     click.echo(f"   Logs: {data_dir}/serve.log, {data_dir}/worker.log")
-    click.echo(f"   Stop: rka stop-all")
+    click.echo("   Stop: rka stop-all")
 
 
 @main.command("stop-all")

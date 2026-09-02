@@ -6,13 +6,13 @@ argument-hint: "[--force]"
 Run the cross-platform setup helper script that ships with this plugin:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup-claude-desktop.py
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/setup-claude-desktop.py"
 ```
 
 If the user passed `--force` as an argument to the slash command, append it:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup-claude-desktop.py --force
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/setup-claude-desktop.py" --force
 ```
 
 Capture the script's stdout AND stderr in your response. The script handles all the cross-platform logic — OS detection, config file location, atomic merge, backup with timestamp, conflict detection, restore-on-failure.

@@ -5,6 +5,10 @@ All notable changes to RKA are documented here. Format loosely follows
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [3.0.0] — 2026-09-01 (RKA Core / Writer separation)
+
 ### Added
 
 - A release-only GHCR workflow now preflight-smokes, builds, publishes, and
@@ -25,6 +29,11 @@ All notable changes to RKA are documented here. Format loosely follows
 - A clean-wheel CI gate now installs the built `rka-core` artifact outside the
   checkout and verifies migrations, SQLite/FTS retrieval, REST health, the
   worker, and the five-tool MCP surface.
+- The wheel artifact gate now exercises Python 3.11 and 3.13 on Linux, macOS,
+  and Windows through one OS-neutral disposable-venv launcher.
+- Claude Code and Claude Desktop plugin entry points now use
+  `uv run --no-project` across operating systems. The SessionStart probe uses
+  the IPv4 loopback default and reports the live backend health version.
 - `python -m rka` is now a supported entry point alongside the `rka` command.
 
 ### Changed
@@ -40,11 +49,23 @@ All notable changes to RKA are documented here. Format loosely follows
 - Dockerless state now defaults consistently to `~/.rka/rka.db`, independent
   of the current working directory. The base wheel defaults optional
   embeddings off; the Docker/full profile enables them explicitly.
-
-## [3.0.0] — 2026-08-26 (RKA Core / Writer separation)
-
-### Changed
-
+- Production container builds now pin multi-architecture Node, Python, and uv
+  manifest digests, verify the sqlite-vec source archive checksum, install the
+  reviewed `uv.lock`, and pin Core CI actions to immutable commits.
+- Phase-2 sqlite-vec startup and frozen manuscript-source compatibility writes
+  now use one cross-platform advisory-lock backend (`fcntl` on POSIX and
+  `msvcrt` on Windows). The installed-wheel smoke exercises actual lock
+  contention and release on every supported OS/Python combination.
+- CLI startup output now escapes characters unsupported by a legacy console
+  encoding instead of aborting on redirected Windows `cp1252` streams. UTF-8
+  terminals continue to receive the original Unicode output.
+- SQLite backups now close both database connections before atomically
+  publishing the temporary snapshot, avoiding Windows sharing violations while
+  preserving the existing POSIX durability sequence.
+- Atomic snapshot and Writer-export publication now use the writable file
+  descriptors required by Windows `fsync`. Windows skips unsupported POSIX
+  directory `fsync` without retaining a handle that blocks temporary-directory
+  cleanup; supported platforms retain the existing rename-durability step.
 - **RKA Core is now a focused research-record and retrieval system.** Core owns
   durable journal, literature, decision, mission, claim, evidence, provenance,
   lifecycle, and retrieval contracts. Manuscript drafting and revision are
@@ -144,6 +165,9 @@ All notable changes to RKA are documented here. Format loosely follows
   immutable heads, and rolls back atomically on integrity failure.
 
 ## [2.9.0] — 2026-07-23 (Native claim spine + provenance-gated Writer)
+
+> **Untagged development milestone.** Version 2.9.0 was not published as a
+> standalone GitHub release; its changes are included in the 3.0.0 release.
 
 This release integrates the native manuscript/claim-spine branch with the
 2.8.1 ChatGPT connector and Writer review work from `main`. It adds a durable,

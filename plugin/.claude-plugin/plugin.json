@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.py",
+            "command": "uv run --no-project \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.py\"",
             "async": true
           }
         ]

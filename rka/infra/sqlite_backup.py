@@ -7,6 +7,7 @@ import hashlib
 import os
 import sqlite3
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,8 +76,10 @@ def backup_sqlite_database(
     try:
         source_uri = f"{source_path.as_uri()}?mode=ro"
         with (
-            sqlite3.connect(source_uri, uri=True, timeout=30) as source_connection,
-            sqlite3.connect(temporary_path) as destination_connection,
+            closing(
+                sqlite3.connect(source_uri, uri=True, timeout=30)
+            ) as source_connection,
+            closing(sqlite3.connect(temporary_path)) as destination_connection,
         ):
             source_connection.execute("PRAGMA query_only = ON")
             source_connection.backup(destination_connection)
@@ -109,8 +112,7 @@ def backup_sqlite_database(
             )
 
         os.chmod(temporary_path, 0o600)
-        with temporary_path.open("rb") as backup_file:
-            os.fsync(backup_file.fileno())
+        fsync_file(temporary_path)
         digest = _sha256(temporary_path)
         size_bytes = temporary_path.stat().st_size
         os.replace(temporary_path, destination_path)
@@ -136,8 +138,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def fsync_file(path: Path) -> None:
+    """Persist a completed file using a Windows-compatible descriptor."""
+
+    # Windows' CRT-backed fsync rejects read-only descriptors with EBADF.
+    # The file is already complete, so open it read/write without truncation.
+    with path.open("r+b") as output:
+        os.fsync(output.fileno())
+
+
 def fsync_directory(directory: Path) -> None:
     """Persist the atomic rename where directory fsync is supported."""
+
+    # Windows does not provide POSIX directory fsync semantics. Opening a
+    # directory through the CRT solely to probe fsync can retain a directory
+    # handle after EBADF and prevent a disposable directory from being removed.
+    if os.name == "nt":
+        return
 
     try:
         descriptor = os.open(directory, os.O_RDONLY)
@@ -151,7 +168,11 @@ def fsync_directory(directory: Path) -> None:
         if exc.errno not in _UNSUPPORTED_DIRECTORY_FSYNC_ERRNOS:
             raise
     finally:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if exc.errno not in _UNSUPPORTED_DIRECTORY_FSYNC_ERRNOS:
+                raise
 
 
 _UNSUPPORTED_DIRECTORY_FSYNC_ERRNOS = {

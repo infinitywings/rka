@@ -20,7 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from rka import __version__
-from rka.infra.sqlite_backup import fsync_directory, protected_sqlite_runtime_paths
+from rka.infra.sqlite_backup import (
+    fsync_directory,
+    fsync_file,
+    protected_sqlite_runtime_paths,
+)
 
 
 LEGACY_WRITER_EXPORT_CONTRACT = "rka-legacy-writer-export/v1"
@@ -257,8 +261,7 @@ def export_legacy_writer_bundle(
             raise LegacyWriterExportError("SQLite source changed during Writer export")
 
         os.chmod(temporary_path, 0o600)
-        with temporary_path.open("rb") as bundle:
-            os.fsync(bundle.fileno())
+        fsync_file(temporary_path)
         bundle_sha256 = _sha256_file(temporary_path)
         os.replace(temporary_path, output_path)
         fsync_directory(output_path.parent)

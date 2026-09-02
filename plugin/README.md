@@ -6,7 +6,7 @@
 
 This is the official Claude Code plugin for [RKA](https://github.com/rka-project/rka-core). It lives inside the upstream RKA Core repository at `plugin/`, distributed via the local marketplace at `.claude-plugin/marketplace.json` in the repo root.
 
-> **Quick install** — see [INSTALL.md at the repo root](../INSTALL.md). The TL;DR: install Git, Python 3, uv, and Docker Compose v2; clone the repo; run `docker compose up -d` and `uv tool install --force --reinstall .`; then in Claude Code run `/plugin marketplace add /path/to/cloned/rka` followed by `/plugin install rka@rka`.
+> **Quick install** — see [INSTALL.md at the repo root](../INSTALL.md). The TL;DR: install Git, uv, and Docker Compose v2; clone the repo; run `docker compose up -d` and `uv tool install --force --reinstall .`; then in Claude Code run `/plugin marketplace add /path/to/cloned/rka` followed by `/plugin install rka@rka`.
 
 ---
 
@@ -30,9 +30,9 @@ RKA Core.
 
 Everything in this plugin works on **macOS, Windows, and Linux**:
 
-- **Wrapper script** (`bin/rka-mcp-bridge.py`): Python 3, no dependencies beyond stdlib. Replaces the deprecated bash wrapper.
-- **SessionStart hook** (`hooks/session-start.py`): Python 3, uses `urllib.request` for the health check.
-- **Setup helper** (`scripts/setup-claude-desktop.py`): Python 3, OS-detects to find the right `claude_desktop_config.json` path, atomic merge with backup.
+- **Wrapper script** (`bin/rka-mcp-bridge.py`): launched through `uv run --no-project`; no platform-specific Python command name is assumed.
+- **SessionStart hook** (`hooks/session-start.py`): launched through uv and uses only Python's standard library for its bounded health check.
+- **Setup helper** (`scripts/setup-claude-desktop.py`): launched through uv, OS-detects the right `claude_desktop_config.json` path, and performs an atomic merge with backup.
 
 Path differences handled by the plugin:
 
@@ -54,7 +54,7 @@ Microsoft Store install vs standalone `.exe` install of Claude Desktop on Window
   2. `rka` on `PATH` (install via `uv tool install --force --reinstall .` from the rka repo — lands at `~/.local/bin/rka` on macOS/Linux, `%USERPROFILE%\.local\bin\rka.exe` on Windows).
 
   If neither is present, the wrapper exits with a clear error pointing at both options.
-- **Python 3** — required for the wrapper, hook, and setup helper. Ships with macOS by default; install from python.org with "Add to PATH" checked on Windows; standard package on Linux.
+- **uv** — required for the wrapper, hook, and setup helper. It uses an existing Python 3 runtime or installs a managed one consistently across macOS, Windows, and Linux.
 
 ---
 
