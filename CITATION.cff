@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: >-
+  If you use RKA Core in your research, please cite the accompanying paper.
+title: RKA Core
+type: software
+authors:
+  - family-names: Fu
+    given-names: Chenglong
+    affiliation: The University of North Carolina at Charlotte
+    orcid: "https://orcid.org/0000-0001-6555-9858"
+repository-code: "https://github.com/rka-project/rka-core"
+url: "https://github.com/rka-project/rka-core"
+license: MIT
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Fu
+      given-names: Chenglong
+      affiliation: The University of North Carolina at Charlotte
+      orcid: "https://orcid.org/0000-0001-6555-9858"
+  title: >-
+    Research Should Outlive the Agent: RKA as Researcher-Controlled Project
+    Memory for Agentic Research
+  doi: 10.2139/ssrn.7396118
+  url: "https://ssrn.com/abstract=7396118"
+  year: 2026
+  month: 9
