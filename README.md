@@ -6,6 +6,7 @@
 
 [![pytest](https://github.com/rka-project/rka-core/actions/workflows/pytest.yml/badge.svg?branch=main)](https://github.com/rka-project/rka-core/actions/workflows/pytest.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Paper DOI](https://img.shields.io/badge/DOI-10.2139%2Fssrn.7396118-0A6EBD.svg)](https://doi.org/10.2139/ssrn.7396118)
 
 **A local-first research operating system for turning day-to-day research activity into durable, auditable knowledge.**
 
@@ -245,7 +246,18 @@ features.
 
 ## Research
 
-The working paper [*Framing Is Human: Researcher–Brain–Executor Architecture for AI-Assisted Research*](docs/paper/RKA-paper.pdf) describes RKA's architectural argument, design principles, and evaluation.
+The current preprint, [*Research Should Outlive the Agent: RKA as
+Researcher-Controlled Project Memory for Agentic
+Research*](https://doi.org/10.2139/ssrn.7396118), presents RKA Core as
+researcher-controlled infrastructure for preserving project decisions,
+provenance, reviewed knowledge, and history across agents and sessions. RKA is
+not an autonomous research agent; the researcher retains authority over project
+framing and consequential decisions.
+
+Citation metadata is available in [`CITATION.cff`](CITATION.cff). The earlier
+working paper [*Framing Is Human: Researcher–Brain–Executor Architecture for
+AI-Assisted Research*](docs/paper/RKA-paper.pdf) is retained as a historical
+description of RKA's previous architecture.
 
 RKA is being developed for research workflows at UNC Charlotte. Feedback, comparative evaluations, interoperability experiments, and research collaborations are welcome.
 
