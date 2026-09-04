@@ -1,8 +1,14 @@
 # RKA Ecosystem Repository Separation Execution Plan
 
-- Status: accepted execution source under ADR 0012; E0 documentation in progress
+- Status: superseded as an active execution source on 2026-09-03; retained as
+  separation history
 - Date: 2026-08-25
 - Decision owner: Chenglong Fu
+- Superseded by:
+  [`2026-09-03-rka-ecosystem-active-roadmap.md`](2026-09-03-rka-ecosystem-active-roadmap.md)
+- Reason: E0-E2 and the initial repository split are complete, Agentic
+  extraction was shelved by ADR 0013, RKA App now exists, and Writer has been
+  re-baselined around the Authoring IR and convergence protocol.
 - Current repository: `infinitywings/rka`
 - Clean planning baseline: `origin/main` at `57fa8f0`
 - Related integrity candidate: `fix/claim-edge-integrity` at `eb9faa3`
@@ -14,6 +20,9 @@
   [`2026-08-25-rka-core-only-baseline.md`](../specs/2026-08-25-rka-core-only-baseline.md)
 - Claim-edge audit and remediation evidence:
   [`2026-08-25-claim-edge-integrity-audit.md`](../specs/2026-08-25-claim-edge-integrity-audit.md)
+
+> This document describes the original separation program. Its Agentic and
+> pre-rebaseline Writer steps are historical, not current authorization.
 
 ## 1. Objective
 
