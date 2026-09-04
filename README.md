@@ -209,7 +209,8 @@ For a complete first-project walkthrough, see [USAGE_GUIDE.md](USAGE_GUIDE.md).
 | **CLI** | Starting services, status, backup, credentials, and workspace bootstrap | [Technical Reference](docs/TECHNICAL_REFERENCE.md) |
 | **REST API** | Custom integrations and application development | [Technical Reference](docs/TECHNICAL_REFERENCE.md), live `/docs` |
 | **ChatGPT connector** | Authenticated access from ChatGPT to a local RKA instance | [Connector Guide](docs/CHATGPT_CONNECTOR.md) |
-| **Writer (separate project)** | Explicitly invoked manuscript assistance using RKA's public contract | [`rka-project/rka-writer`](https://github.com/rka-project/rka-writer) |
+| **Writer (separate project)** | Researcher-controlled authoring graph and convergence workbench using RKA's public contract | [`rka-project/rka-writer`](https://github.com/rka-project/rka-writer) |
+| **App (separate project)** | Installation, lifecycle supervision, and optional user-owned deployment adapters | [`rka-project/rka-app`](https://github.com/rka-project/rka-app) |
 
 ## Architecture
 
@@ -219,25 +220,24 @@ See [Architecture](docs/ARCHITECTURE.md) for the runtime model, data layers, pro
 
 ## Roadmap
 
-The immediate priority is to harden RKA as an independently usable research-
-knowledge core. Writer remains a separate downstream product under the same
-RKA Ecosystem project:
+Core reliability and the stable external contract are established. The active
+ecosystem now advances through three coordinated tracks:
 
-1. **Core reliability** — harden journal correctness, provenance, project
-   isolation, retrieval, claim edges, migrations, export/import, and recovery.
-2. **Stable integration contract** — freeze the supported REST/MCP surface and
-   provide version, capability, and compatibility discovery.
-3. **RKA Writer extraction** — move the Writer skill, manuscript semantics,
-   academic-writing tools, and Workbench to `rka-project/rka-writer`.
-4. **Future Core slimming and ecosystem validation** — slim the Core
-   distribution only in an explicitly approved breaking release, after
-   legacy-state migration and downstream compatibility tests pass.
+1. **Core 3.0 and maintenance** — release the cross-platform Core artifact and
+   continue correctness, retrieval, provenance, recovery, and compatibility.
+2. **Local-first access** — use RKA App for Foundation 0, agent-guided local
+   setup, a fixed-sample read-only public demo, and an optional user-owned
+   deployment template.
+3. **RKA Writer re-baseline** — freeze an Authoring IR and convergence protocol,
+   then validate one fully traceable paragraph before broader drafting or UI
+   implementation.
 
 The earlier Agentic repository/extraction proposal is shelved. Its history is
 preserved, but it is not an active product, dependency, or installation path.
 
-The Workbench, ARA interoperability, and dual-output evaluation remain planned
-Writer/ecosystem work; they are not the immediate Core implementation target.
+Writer and App remain independently released consumers of Core. Hugging Face
+is an optional Core trial path, not a Writer dependency or a replacement for
+local privacy.
 
 The dependency-ordered plan lives in the repository [Roadmap](ROADMAP.md), with
 active work tracked through [GitHub milestones](https://github.com/rka-project/rka-core/milestones).
@@ -271,7 +271,7 @@ RKA is being developed for research workflows at UNC Charlotte. Feedback, compar
 | [Architecture](docs/ARCHITECTURE.md) | Design rationale, components, data model, and knowledge lifecycle |
 | [Technical Reference](docs/TECHNICAL_REFERENCE.md) | CLI, MCP, REST, configuration, and development entry points |
 | [Core Profile](docs/CORE_PROFILE.md) | Supported Core dependencies, test boundary, and startup smoke gate |
-| [Roadmap](ROADMAP.md) | Dependency-ordered milestones for the epistemic pipeline, workbench, and ARA interoperability |
+| [Roadmap](ROADMAP.md) | Active Core, App/access, Writer, and integration tracks with dependency-ordered exit gates |
 | [Embedding Backends](docs/embedding_backends.md) | Local and OpenAI-compatible embedding configuration |
 | [Credential Vault](docs/CRED_VAULT.md) | Secure credential storage and propagation |
 | [ChatGPT Connector](docs/CHATGPT_CONNECTOR.md) | Authenticated remote MCP access |
